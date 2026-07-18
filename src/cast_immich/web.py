@@ -304,11 +304,15 @@ def create_management_app(
                 collection = EventCollection(collection_value)
             except (TypeError, ValueError):
                 return _error(400, "invalid_request", "unknown event collection")
-            if collection is EventCollection.FAMILY_RECAP:
+            if collection is EventCollection.RECENT_PERSON_RECAP:
                 try:
                     source_id = UUID(body.get("id"))
                 except (TypeError, ValueError):
-                    return _error(400, "invalid_request", "family recap person id must be a UUID")
+                    return _error(
+                        400,
+                        "invalid_request",
+                        "recent person recap id must be a UUID",
+                    )
         elif kind is SourceKind.FILTER:
             parsed_dates: list[date | None] = []
             for field in ("start_date", "end_date"):

@@ -182,8 +182,8 @@ def test_event_and_filter_sources_round_trip(tmp_path: Path) -> None:
     history = HistoryStore(path).for_output("office")
     person_id = "12345678-1234-4234-8234-123456789abc"
 
-    recap = history.set_source("event", person_id, collection="family_recap")
-    assert recap.source_collection == "family_recap"
+    recap = history.set_source("event", person_id, collection="recent_person_recap")
+    assert recap.source_collection == "recent_person_recap"
     assert recap.source_id == person_id
 
     filtered = history.set_source(

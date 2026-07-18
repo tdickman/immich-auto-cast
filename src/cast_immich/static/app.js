@@ -202,7 +202,7 @@ function renderSelectedWorkspace() {
   const kind = draft.pendingKind || sourceSelection(source);
   document.querySelector("#source-kind").value = kind;
   document.querySelector("#album-select").value = kind === "album" ? source.id || "" : "";
-  document.querySelector("#person-select").value = ["person", "event:family_recap"].includes(kind) ? source.id || "" : "";
+  document.querySelector("#person-select").value = ["person", "event:recent_person_recap"].includes(kind) ? source.id || "" : "";
   const search = document.querySelector("#search-query");
   if (!draft.searchDirty && document.activeElement !== search) search.value = source.kind === "search" ? source.query || "" : draft.searchQuery;
   if (source.kind === "filter" && !draft.pendingKind) {
@@ -481,7 +481,7 @@ function renderHistory(outputId) {
 
 function showSourceControl(kind) {
   document.querySelector("#album-source").style.display = kind === "album" ? "grid" : "none";
-  document.querySelector("#person-source").style.display = ["person", "event:family_recap"].includes(kind) ? "grid" : "none";
+  document.querySelector("#person-source").style.display = ["person", "event:recent_person_recap"].includes(kind) ? "grid" : "none";
   document.querySelector("#search-source").style.display = kind === "search" ? "block" : "none";
   document.querySelector("#filter-source").style.display = kind === "filter" ? "block" : "none";
 }
@@ -880,7 +880,7 @@ document.querySelector("#source-kind").addEventListener("change", event => {
   sourceDraft(outputId).pendingKind = kind === "timeline" ? null : kind;
   showSourceControl(kind);
   if (kind === "timeline") applySource(outputId, { kind }, "Using the full timeline");
-  else if (kind.startsWith("event:") && kind !== "event:family_recap") {
+  else if (kind.startsWith("event:") && kind !== "event:recent_person_recap") {
     const collection = kind.slice("event:".length);
     applySource(outputId, { kind: "event", collection }, `Using ${event.currentTarget.selectedOptions[0].textContent}`);
   }
@@ -892,11 +892,11 @@ document.querySelector("#album-select").addEventListener("change", event => {
 document.querySelector("#person-select").addEventListener("change", event => {
   const outputId = state.selectedOutputId;
   if (!event.currentTarget.value) return;
-  const familyRecap = document.querySelector("#source-kind").value === "event:family_recap";
-  const source = familyRecap
-    ? { kind: "event", collection: "family_recap", id: event.currentTarget.value }
+  const personRecap = document.querySelector("#source-kind").value === "event:recent_person_recap";
+  const source = personRecap
+    ? { kind: "event", collection: "recent_person_recap", id: event.currentTarget.value }
     : { kind: "person", id: event.currentTarget.value };
-  applySource(outputId, source, `${familyRecap ? "Recapping" : "Showing"} ${event.currentTarget.selectedOptions[0].textContent}`);
+  applySource(outputId, source, `${personRecap ? "Recapping" : "Showing"} ${event.currentTarget.selectedOptions[0].textContent}`);
 });
 document.querySelector("#search-source").addEventListener("submit", event => {
   event.preventDefault();

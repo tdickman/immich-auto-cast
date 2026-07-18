@@ -304,7 +304,7 @@ class ServiceGraph:
             return False
         if (
             normalized.kind is SourceKind.EVENT
-            and normalized.collection is EventCollection.FAMILY_RECAP
+            and normalized.collection is EventCollection.RECENT_PERSON_RECAP
             and normalized.id not in {person.id for person in await self.people()}
         ):
             return False

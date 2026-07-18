@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -74,7 +75,7 @@ class EventCollection(StrEnum):
     RECENT_FAVORITES = "recent_favorites"
     LAST_MONTH = "last_month"
     SEASONAL = "seasonal"
-    FAMILY_RECAP = "family_recap"
+    RECENT_PERSON_RECAP = "recent_person_recap"
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +123,9 @@ class ImmichClient:
         self._owns_session = session is None
         self._metadata: dict[UUID, tuple[str | None, str | None]] = {}
         self._today = today
+        self._random_pools: dict[tuple[PhotoSource, date | None], deque[Asset]] = {}
+        self._random_pool_locks: dict[tuple[PhotoSource, date | None], asyncio.Lock] = {}
+        self._recyclable_assets: dict[tuple[PhotoSource, date | None], dict[UUID, Asset]] = {}
 
     async def __aenter__(self) -> ImmichClient:
         await self.start()
@@ -192,6 +196,87 @@ class ImmichClient:
         else:
             raise ValueError("invalid photo source")
         path = "/api/search/smart" if source.kind is SourceKind.SEARCH else "/api/search/random"
+        if path == "/api/search/random":
+            return await self._select_from_random_pool(recent, batch_size, count, source, payload)
+        candidates = await self._request_candidates(path, payload, source)
+        selected = [asset for asset in candidates if asset.id not in recent]
+        if not selected:
+            raise AssetUnavailable("Immich returned no eligible new images")
+        random.SystemRandom().shuffle(selected)
+        return tuple(selected[:count])
+
+    async def _select_from_random_pool(
+        self,
+        recent: set[UUID],
+        batch_size: int,
+        count: int,
+        source: PhotoSource,
+        payload: dict[str, Any],
+    ) -> tuple[Asset, ...]:
+        key = (source, self._today() if source.kind is SourceKind.EVENT else None)
+        lock = self._random_pool_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            pool = self._random_pools.setdefault(key, deque())
+            recyclable = (
+                source.kind is SourceKind.EVENT and source.collection is EventCollection.ON_THIS_DAY
+            )
+            known = self._recyclable_assets.setdefault(key, {}) if recyclable else None
+            low_water = max(1, min(max(batch_size, count, 1), 1000) // 5)
+            fetched = False
+            if len(pool) <= low_water and (known is None or not known):
+                await self._refill_random_pool(pool, known, source, payload)
+                fetched = True
+
+            selected = self._consume_pool(pool, recent, count)
+            if len(selected) < count and known is None:
+                if not fetched:
+                    await self._refill_random_pool(pool, None, source, payload)
+                remaining = count - len(selected)
+                excluded = recent | {asset.id for asset in selected}
+                selected.extend(self._consume_pool(pool, excluded, remaining))
+            if known is not None and len(selected) < count:
+                cycle = list(known.values())
+                random.SystemRandom().shuffle(cycle)
+                if len(cycle) > 1 and selected and cycle[0].id == selected[-1].id:
+                    cycle.append(cycle.pop(0))
+                while cycle and len(selected) < count:
+                    selected.extend(cycle[: count - len(selected)])
+            if not selected:
+                raise AssetUnavailable("Immich returned no eligible new images")
+            return tuple(selected[:count])
+
+    async def _refill_random_pool(
+        self,
+        pool: deque[Asset],
+        known: dict[UUID, Asset] | None,
+        source: PhotoSource,
+        payload: dict[str, Any],
+    ) -> None:
+        candidates = await self._request_candidates("/api/search/random", payload, source)
+        existing = {asset.id for asset in pool}
+        for asset in candidates:
+            if asset.id not in existing:
+                pool.append(asset)
+                existing.add(asset.id)
+            if known is not None:
+                known[asset.id] = asset
+
+    @staticmethod
+    def _consume_pool(pool: deque[Asset], recent: set[UUID], count: int) -> list[Asset]:
+        selected: list[Asset] = []
+        for _ in range(len(pool)):
+            asset = pool.popleft()
+            if asset.id in recent:
+                pool.append(asset)
+            else:
+                selected.append(asset)
+                if len(selected) == count:
+                    break
+        return selected
+
+    async def _request_candidates(
+        self, path: str, payload: dict[str, Any], source: PhotoSource
+    ) -> list[Asset]:
         data = await self._json_request("POST", path, json=payload)
         values = data.get("assets", {}).get("items") if isinstance(data, dict) else data
         if not isinstance(values, list):
@@ -204,14 +289,23 @@ class ImmichClient:
             asset = self._parse_eligible_asset(
                 item, require_timeline=source.kind is SourceKind.TIMELINE
             )
-            if asset is not None and asset.id not in recent:
+            if asset is not None:
                 candidates[asset.id] = asset
                 self._metadata[asset.id] = (asset.location, asset.date)
-        if not candidates:
-            raise AssetUnavailable("Immich returned no eligible new images")
         selected = list(candidates.values())
         random.SystemRandom().shuffle(selected)
-        return tuple(selected[:count])
+        return selected
+
+    def discard_asset(self, source: PhotoSource, asset_id: UUID) -> None:
+        for key, pool in self._random_pools.items():
+            if key[0] != source:
+                continue
+            retained = [asset for asset in pool if asset.id != asset_id]
+            pool.clear()
+            pool.extend(retained)
+        for key, known in self._recyclable_assets.items():
+            if key[0] == source:
+                known.pop(asset_id, None)
 
     def _apply_event_filter(self, payload: dict[str, Any], source: PhotoSource) -> None:
         today = self._today()
@@ -224,7 +318,7 @@ class ImmichClient:
             last_month = (this_month - timedelta(days=1)).replace(day=1)
             payload["takenAfter"] = self._date_time(last_month)
             payload["takenBefore"] = self._date_time(this_month)
-        elif collection is EventCollection.FAMILY_RECAP and source.id is not None:
+        elif collection is EventCollection.RECENT_PERSON_RECAP and source.id is not None:
             payload["personIds"] = [str(source.id)]
             payload["takenAfter"] = self._date_time(today - timedelta(days=365))
         elif collection in {EventCollection.ON_THIS_DAY, EventCollection.SEASONAL}:

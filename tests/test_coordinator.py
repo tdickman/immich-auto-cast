@@ -13,7 +13,13 @@ from cast_immich.cast import CastEvent, EventKind, MediaStatus, ReceiverStatus
 from cast_immich.config import RotationSettings
 from cast_immich.coordinator import Command, CommandResult, Coordinator, State
 from cast_immich.history import DisplayRecord, HistoryState
-from cast_immich.immich import Asset, PermanentImmichError, PhotoSource, SourceKind
+from cast_immich.immich import (
+    Asset,
+    AssetUnavailable,
+    PermanentImmichError,
+    PhotoSource,
+    SourceKind,
+)
 
 INSTALLATION_ID = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
 ASSET_ID = UUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
@@ -348,6 +354,52 @@ async def test_preparation_publishes_the_next_ten_assets_in_cast_order() -> None
 
     assert cast.loads[0][3]["assetId"] == str(assets[0].id)
     assert coordinator.snapshot.upcoming_assets == tuple(asset.id for asset in assets[1:])
+    await coordinator.close()
+
+
+@pytest.mark.asyncio
+async def test_preparation_discards_an_unavailable_candidate_and_continues() -> None:
+    assets = tuple(Asset(UUID(int=value)) for value in range(1, 12))
+
+    class QueueSelector:
+        def __init__(self) -> None:
+            self.discarded: list[UUID] = []
+
+        async def select_assets(
+            self, recent: set[UUID], batch_size: int, count: int
+        ) -> tuple[Asset, ...]:
+            return assets
+
+        def discard_asset(self, source: PhotoSource, asset_id: UUID) -> None:
+            self.discarded.append(asset_id)
+
+    class QueueRelay:
+        async def preload(self, asset_id: UUID) -> None:
+            pass
+
+        async def mint(self, asset_id: UUID) -> tuple[str, str]:
+            if asset_id == assets[0].id:
+                raise AssetUnavailable("preview disappeared")
+            return f"http://192.168.1.5:8787/image/{asset_id}", "image/jpeg"
+
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    selector = QueueSelector()
+    cast = Cast()
+    coordinator = Coordinator(
+        queue,
+        selector,
+        QueueRelay(),
+        cast,
+        RotationSettings(0.02, 0.01, 0.02, 5, 10),
+        INSTALLATION_ID,
+        0.02,
+    )
+
+    await drive_idle_to_load(coordinator, queue)
+
+    assert selector.discarded == [assets[0].id]
+    assert cast.loads[0][3]["assetId"] == str(assets[1].id)
+    assert assets[0].id not in coordinator.snapshot.upcoming_assets
     await coordinator.close()
 
 

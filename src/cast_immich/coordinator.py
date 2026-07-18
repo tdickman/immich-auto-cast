@@ -71,6 +71,8 @@ class AssetSelector(Protocol):
         source: PhotoSource,
     ) -> tuple[Asset, ...]: ...
 
+    def discard_asset(self, source: PhotoSource, asset_id: UUID) -> None: ...
+
 
 class Relay(Protocol):
     async def preload(self, asset_id: UUID) -> None: ...
@@ -894,8 +896,19 @@ class Coordinator:
             except Exception:
                 if not candidates:
                     raise
-            asset = candidates[0]
-            url, content_type = await self._relay.mint(asset.id)
+            while candidates:
+                asset = candidates.pop(0)
+                try:
+                    url, content_type = await self._relay.mint(asset.id)
+                except AssetUnavailable:
+                    candidates = [candidate for candidate in candidates if candidate.id != asset.id]
+                    discard = getattr(self._selector, "discard_asset", None)
+                    if discard is not None:
+                        discard(self._source, asset.id)
+                    continue
+                break
+            else:
+                raise AssetUnavailable("no selected image remains available")
             event = _PreparedEvent(
                 generation,
                 nonce,
@@ -904,7 +917,7 @@ class Coordinator:
                 url,
                 content_type,
                 None,
-                tuple(candidates[1:11]),
+                tuple(candidates[:10]),
             )
         except asyncio.CancelledError:
             raise

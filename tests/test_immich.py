@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import date
+from itertools import pairwise
 from typing import Any
 from uuid import UUID
 
@@ -281,7 +282,7 @@ async def test_ai_search_uses_smart_search_contract(serve_app: Any) -> None:
             PhotoSource(
                 SourceKind.EVENT,
                 UUID(int=42),
-                collection=EventCollection.FAMILY_RECAP,
+                collection=EventCollection.RECENT_PERSON_RECAP,
             ),
             {
                 "personIds": [str(UUID(int=42))],
@@ -330,14 +331,19 @@ async def test_event_and_custom_filters_use_random_search_contract(
 @pytest.mark.asyncio
 async def test_on_this_day_keeps_only_matching_dates_from_prior_years(serve_app: Any) -> None:
     other_id = UUID(int=2)
+    matching_id = UUID(int=3)
     observed: dict[str, Any] = {}
+    requests = 0
 
     async def search(request: web.Request) -> web.Response:
+        nonlocal requests
+        requests += 1
         observed.update(await request.json())
         return web.json_response(
             [
                 eligible(localDateTime="2019-07-18T09:00:00"),
                 eligible(other_id, localDateTime="2019-07-19T09:00:00"),
+                eligible(matching_id, localDateTime="2020-07-18T09:00:00"),
             ]
         )
 
@@ -347,11 +353,42 @@ async def test_on_this_day_keeps_only_matching_dates_from_prior_years(serve_app:
     settings = ImmichSettings(str(server.make_url("/")).rstrip("/"), "secret", 2, 1)
     source = PhotoSource(SourceKind.EVENT, collection=EventCollection.ON_THIS_DAY)
     async with ImmichClient(settings, today=lambda: date(2026, 7, 18)) as client:
-        selected = await client.select_assets_for(set(), 20, 2, source)
+        selected = await client.select_assets_for(set(), 20, 11, source)
+        repeated = await client.select_assets_for({ASSET_ID, matching_id}, 20, 11, source)
 
-    assert [asset.id for asset in selected] == [ASSET_ID]
+    assert len(selected) == len(repeated) == 11
+    assert {asset.id for asset in (*selected, *repeated)} == {ASSET_ID, matching_id}
+    assert all(left.id != right.id for left, right in pairwise(selected))
+    assert all(left.id != right.id for left, right in pairwise(repeated))
+    assert requests == 1
     assert observed["takenBefore"] == "2026-01-01T00:00:00Z"
     assert observed["size"] == 1000
+
+
+@pytest.mark.asyncio
+async def test_random_search_batch_is_consumed_before_refill(serve_app: Any) -> None:
+    requests = 0
+    assets = [UUID(int=value) for value in range(1, 31)]
+
+    async def search(_request: web.Request) -> web.Response:
+        nonlocal requests
+        requests += 1
+        return web.json_response([eligible(asset_id) for asset_id in assets])
+
+    app = web.Application()
+    app.router.add_post("/api/search/random", search)
+    server = await serve_app(app)
+    settings = ImmichSettings(str(server.make_url("/")).rstrip("/"), "secret", 2, 1)
+    selected_ids: set[UUID] = set()
+    async with ImmichClient(settings) as client:
+        initial = await client.select_assets(set(), 50, 11)
+        selected_ids.update(asset.id for asset in initial)
+        for _ in range(8):
+            selected = await client.select_assets(selected_ids, 50, 1)
+            selected_ids.add(selected[0].id)
+
+    assert len(selected_ids) == 19
+    assert requests == 1
 
 
 @pytest.mark.asyncio

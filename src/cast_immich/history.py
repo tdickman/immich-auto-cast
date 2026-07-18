@@ -103,7 +103,7 @@ class HistoryStore:
     VERSION = 3
     SOURCE_KINDS = frozenset({"timeline", "album", "person", "search", "event", "filter"})
     EVENT_COLLECTIONS = frozenset(
-        {"on_this_day", "recent_favorites", "last_month", "seasonal", "family_recap"}
+        {"on_this_day", "recent_favorites", "last_month", "seasonal", "recent_person_recap"}
     )
 
     def __init__(self, path: Path) -> None:
@@ -405,7 +405,7 @@ class HistoryStore:
                 value is not None for value in (query, start_date, end_date, city, state, country)
             ):
                 raise error_type("invalid event collection")
-            if collection == "family_recap":
+            if collection == "recent_person_recap":
                 if not isinstance(source_id, str):
                     raise error_type("invalid photo source ID")
                 try:
