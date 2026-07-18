@@ -76,9 +76,10 @@ class ImageRelay:
         self._clock = clock
         self._max_tokens = max_tokens
         self._tokens: OrderedDict[str, Capability] = OrderedDict()
-        self._previews: OrderedDict[tuple[UUID, bool], Preview] = OrderedDict()
-        self._preview_tasks: dict[tuple[UUID, bool], asyncio.Task[Preview]] = {}
-        self._web_qr = _make_qr(dashboard_url) if dashboard_url else None
+        self._previews: OrderedDict[tuple[UUID, int], Preview] = OrderedDict()
+        self._preview_tasks: dict[tuple[UUID, int], asyncio.Task[Preview]] = {}
+        self._dashboard_url = dashboard_url
+        self._web_qrs: dict[int, Image.Image] = {}
         self._semaphore = asyncio.Semaphore(settings.max_concurrent)
         self._stream_semaphore = asyncio.Semaphore(settings.max_concurrent)
         self._app = web.Application(client_max_size=1024)
@@ -113,26 +114,42 @@ class ImageRelay:
             self._tokens[token] = replace(capability, pinned=False)
         self._purge()
 
-    async def preload(self, asset: Asset | UUID, *, show_web_qr: bool = False) -> None:
+    async def preload(
+        self,
+        asset: Asset | UUID,
+        *,
+        show_web_qr: bool = False,
+        web_qr_size: int = 1,
+    ) -> None:
         """Fetch and normalize an image before the receiver needs it."""
         if isinstance(asset, Asset) and asset.media_type is MediaType.VIDEO:
             return
         await self._get_preview(
-            asset.id if isinstance(asset, Asset) else asset, show_web_qr=show_web_qr
+            asset.id if isinstance(asset, Asset) else asset,
+            show_web_qr=show_web_qr,
+            web_qr_size=web_qr_size,
         )
 
-    async def preload_media(self, asset: Asset, *, show_web_qr: bool = False) -> None:
-        await self.preload(asset, show_web_qr=show_web_qr)
+    async def preload_media(
+        self, asset: Asset, *, show_web_qr: bool = False, web_qr_size: int = 1
+    ) -> None:
+        await self.preload(asset, show_web_qr=show_web_qr, web_qr_size=web_qr_size)
 
     async def mint(
-        self, asset: Asset | UUID, *, show_web_qr: bool = False
+        self,
+        asset: Asset | UUID,
+        *,
+        show_web_qr: bool = False,
+        web_qr_size: int = 1,
     ) -> tuple[str, str]:
         if self._closed:
             raise AssetUnavailable("media relay is closed")
         self._purge()
         media = asset if isinstance(asset, Asset) else Asset(asset)
         preview = (
-            await self._get_preview(media.id, show_web_qr=show_web_qr)
+            await self._get_preview(
+                media.id, show_web_qr=show_web_qr, web_qr_size=web_qr_size
+            )
             if media.media_type is MediaType.IMAGE
             else None
         )
@@ -151,14 +168,19 @@ class ImageRelay:
         return f"{self._settings.advertised_base_url}/{path}/{token}", content_type
 
     async def mint_media(
-        self, asset: Asset, *, show_web_qr: bool = False
+        self, asset: Asset, *, show_web_qr: bool = False, web_qr_size: int = 1
     ) -> tuple[str, str]:
-        return await self.mint(asset, show_web_qr=show_web_qr)
+        return await self.mint(
+            asset, show_web_qr=show_web_qr, web_qr_size=web_qr_size
+        )
 
-    async def _get_preview(self, asset_id: UUID, *, show_web_qr: bool = False) -> Preview:
+    async def _get_preview(
+        self, asset_id: UUID, *, show_web_qr: bool = False, web_qr_size: int = 1
+    ) -> Preview:
         if self._closed:
             raise AssetUnavailable("image relay is closed")
-        key = (asset_id, show_web_qr)
+        qr_size = web_qr_size if show_web_qr else 0
+        key = (asset_id, qr_size)
         preview = self._previews.get(key)
         if preview is not None:
             self._previews.move_to_end(key)
@@ -166,7 +188,7 @@ class ImageRelay:
         task = self._preview_tasks.get(key)
         if task is None:
             task = asyncio.create_task(
-                self._fetch_preview(asset_id, show_web_qr), name="image-preview-fetch"
+                self._fetch_preview(asset_id, qr_size), name="image-preview-fetch"
             )
             self._preview_tasks[key] = task
             self._active_mints.add(task)
@@ -182,7 +204,7 @@ class ImageRelay:
             self._previews.popitem(last=False)
         return preview
 
-    async def _fetch_preview(self, asset_id: UUID, show_web_qr: bool) -> Preview:
+    async def _fetch_preview(self, asset_id: UUID, web_qr_size: int) -> Preview:
         async with self._semaphore:
             preview = await self._source.fetch_preview(asset_id, self._settings.max_response_bytes)
             if preview.content_type not in ALLOWED_IMAGE_TYPES:
@@ -202,8 +224,17 @@ class ImageRelay:
                         location = await fetch_location(asset_id)
                     except Exception:
                         logger.warning("asset_location_fetch_failed")
-            qr = self._web_qr if show_web_qr else None
+            qr = self._web_qr(web_qr_size) if web_qr_size else None
             return await asyncio.to_thread(_normalize_preview, preview, location, date, qr)
+
+    def _web_qr(self, size: int) -> Image.Image | None:
+        if self._dashboard_url is None:
+            return None
+        qr = self._web_qrs.get(size)
+        if qr is None:
+            qr = _make_qr(self._dashboard_url, size)
+            self._web_qrs[size] = qr
+        return qr
 
     async def start(self) -> None:
         if self._runner is not None:
@@ -390,8 +421,8 @@ def _draw_location(image: Image.Image, location: str) -> None:
     _draw_metadata(image, location, None)
 
 
-def _make_qr(url: str) -> Image.Image:
-    code = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=1, border=4)
+def _make_qr(url: str, size: int = 1) -> Image.Image:
+    code = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=size, border=4)
     code.add_data(url)
     code.make(fit=True)
     return cast(

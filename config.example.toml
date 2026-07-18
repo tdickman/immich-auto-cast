@@ -19,6 +19,7 @@ candidate_batch = 50
 video_max_duration = 30.0
 video_muted = true
 show_web_qr = false
+web_qr_size = 1
 
 [relay]
 bind_host = "0.0.0.0"

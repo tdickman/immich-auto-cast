@@ -564,7 +564,7 @@ function setReceiverOptions(select, selectedUuid) {
 const outputNumberFields = new Set([
   "discovery_timeout", "load_timeout", "interval", "idle_debounce", "cooldown",
   "recent_history", "candidate_batch", "autocast_delay",
-  "video_max_duration",
+  "video_max_duration", "web_qr_size",
 ]);
 
 function outputField(labelText, field, value, options = {}) {
@@ -587,6 +587,7 @@ function outputField(labelText, field, value, options = {}) {
     if (outputNumberFields.has(field)) {
       control.type = "number";
       control.min = options.min || "0.1";
+      if (options.max) control.max = options.max;
       control.step = options.step || "0.1";
     }
     control.value = value ?? "";
@@ -633,6 +634,7 @@ function makeOutputSettingsRow(output) {
     outputField("Maximum video seconds", "video_max_duration", output.video_max_duration),
     outputField("Mute videos", "video_muted", output.video_muted),
     outputField("Show web interface QR code", "show_web_qr", output.show_web_qr),
+    outputField("QR code size (1-6)", "web_qr_size", output.web_qr_size, { min: "1", max: "6", step: "1" }),
   );
   advanced.append(summary, fields);
   row.append(heading, basics, advanced);
@@ -672,6 +674,7 @@ function outputFromTemplate(template, { id, name, uuid }) {
     video_max_duration: template.video_max_duration ?? 30,
     video_muted: template.video_muted ?? true,
     show_web_qr: template.show_web_qr ?? false,
+    web_qr_size: template.web_qr_size ?? 1,
   };
 }
 

@@ -198,17 +198,23 @@ async def test_web_interface_qr_is_drawn_only_when_enabled() -> None:
 
     await relay.mint(ASSET_ID)
     await relay.mint(ASSET_ID, show_web_qr=True)
+    await relay.mint(ASSET_ID, show_web_qr=True, web_qr_size=3)
 
-    plain_preview, qr_preview = [capability.preview for capability in relay._tokens.values()]
+    plain_preview, qr_preview, large_qr_preview = [
+        capability.preview for capability in relay._tokens.values()
+    ]
     with (
         Image.open(io.BytesIO(plain_preview.body)) as plain_image,
         Image.open(io.BytesIO(qr_preview.body)) as qr_image,
+        Image.open(io.BytesIO(large_qr_preview.body)) as large_qr_image,
     ):
         difference = ImageChops.difference(plain_image, qr_image)
+        large_difference = ImageChops.difference(plain_image, large_qr_image)
         assert difference.crop((0, 500, 200, 720)).getbbox() is not None
         assert difference.crop((200, 0, 1280, 720)).getbbox() is None
+        assert large_difference.getbbox()[2] > difference.getbbox()[2]
 
-    assert relay._source.calls == 2
+    assert relay._source.calls == 3
 
 
 @pytest.mark.asyncio

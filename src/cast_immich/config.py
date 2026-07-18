@@ -77,6 +77,7 @@ class RotationSettings:
     video_max_duration: float = 30.0
     video_muted: bool = True
     show_web_qr: bool = False
+    web_qr_size: int = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,6 +155,7 @@ def default_form_values() -> dict[str, Any]:
                 "video_max_duration": 30,
                 "video_muted": True,
                 "show_web_qr": False,
+                "web_qr_size": 1,
             }
         ],
         "relay": {
@@ -345,6 +347,11 @@ def _parse_candidate(
         )
         if discovery_timeout > 30:
             _fail(f"{section}.discovery_timeout must not exceed 30 seconds")
+        web_qr_size = int(
+            _positive(output.get("web_qr_size", 1), f"{section}.web_qr_size", integer=True)
+        )
+        if web_qr_size > 6:
+            _fail(f"{section}.web_qr_size must be between 1 and 6")
         outputs.append(
             OutputSettings(
                 output_id,
@@ -381,6 +388,7 @@ def _parse_candidate(
                     ),
                     _boolean(output.get("video_muted", True), f"{section}.video_muted"),
                     _boolean(output.get("show_web_qr", False), f"{section}.show_web_qr"),
+                    web_qr_size,
                 ),
             )
         )
@@ -456,6 +464,7 @@ def _form_values(settings: Settings, path: Path) -> dict[str, Any]:
                 "video_max_duration": output.rotation.video_max_duration,
                 "video_muted": output.rotation.video_muted,
                 "show_web_qr": output.rotation.show_web_qr,
+                "web_qr_size": output.rotation.web_qr_size,
             }
             for output in settings.outputs
         ],
@@ -541,6 +550,7 @@ def _serialize_configuration(
         "video_max_duration",
         "video_muted",
         "show_web_qr",
+        "web_qr_size",
     )
     for output in values["outputs"]:
         lines.append("[[outputs]]")

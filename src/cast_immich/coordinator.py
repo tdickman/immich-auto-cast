@@ -80,10 +80,12 @@ class Relay(Protocol):
 
     async def mint(self, asset_id: UUID) -> tuple[str, str]: ...
 
-    async def preload_media(self, asset: Asset, *, show_web_qr: bool = False) -> None: ...
+    async def preload_media(
+        self, asset: Asset, *, show_web_qr: bool = False, web_qr_size: int = 1
+    ) -> None: ...
 
     async def mint_media(
-        self, asset: Asset, *, show_web_qr: bool = False
+        self, asset: Asset, *, show_web_qr: bool = False, web_qr_size: int = 1
     ) -> tuple[str, str]: ...
 
     def confirm(self, url: str) -> None: ...
@@ -989,7 +991,9 @@ class Coordinator:
             preload_media = getattr(self._relay, "preload_media", None)
             if preload_media is not None:
                 if self._settings.show_web_qr:
-                    await preload_media(asset, show_web_qr=True)
+                    await preload_media(
+                        asset, show_web_qr=True, web_qr_size=self._settings.web_qr_size
+                    )
                 else:
                     await preload_media(asset)
             elif asset.media_type is MediaType.IMAGE:
@@ -1003,7 +1007,9 @@ class Coordinator:
         mint_media = getattr(self._relay, "mint_media", None)
         if mint_media is not None:
             if self._settings.show_web_qr:
-                url, content_type = await mint_media(asset, show_web_qr=True)
+                url, content_type = await mint_media(
+                    asset, show_web_qr=True, web_qr_size=self._settings.web_qr_size
+                )
             else:
                 url, content_type = await mint_media(asset)
             return str(url), str(content_type)

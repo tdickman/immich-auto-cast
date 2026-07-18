@@ -50,12 +50,21 @@ def test_loads_normalized_settings_and_environment_secret(tmp_path: Path) -> Non
     assert settings.outputs[0].rotation.video_max_duration == 30
     assert settings.outputs[0].rotation.video_muted is True
     assert settings.outputs[0].rotation.show_web_qr is False
+    assert settings.outputs[0].rotation.web_qr_size == 1
 
 
 def test_rejects_non_boolean_video_muting(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     path.write_text(config_text().replace("interval = 30", 'interval = 30\nvideo_muted = "yes"'))
     with pytest.raises(ConfigError, match="video_muted must be a boolean"):
+        load_settings(path)
+
+
+@pytest.mark.parametrize("size", [0, 7, 1.5])
+def test_rejects_invalid_web_qr_size(tmp_path: Path, size: int | float) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(config_text().replace("interval = 30", f"interval = 30\nweb_qr_size = {size}"))
+    with pytest.raises(ConfigError, match="web_qr_size"):
         load_settings(path)
 
 
@@ -154,6 +163,7 @@ def test_editable_settings_round_trip_every_value_and_mask_key(tmp_path: Path) -
         recent_history=17,
         candidate_batch=31,
         show_web_qr=True,
+        web_qr_size=3,
     )
     form["service"]["log_level"] = "debug"
 
@@ -167,7 +177,9 @@ def test_editable_settings_round_trip_every_value_and_mask_key(tmp_path: Path) -
     assert reloaded.settings.service.log_level == "DEBUG"
     assert reloaded.settings.outputs[0].rotation.show_web_qr is True
     assert reloaded.form_values["outputs"][0]["show_web_qr"] is True
+    assert reloaded.settings.outputs[0].rotation.web_qr_size == 3
     assert "show_web_qr = true" in path.read_text(encoding="utf-8")
+    assert "web_qr_size = 3" in path.read_text(encoding="utf-8")
     assert "[[outputs]]" in path.read_text(encoding="utf-8")
     assert "[chromecast]" not in path.read_text(encoding="utf-8")
     assert path.stat().st_mode & 0o777 == 0o600
