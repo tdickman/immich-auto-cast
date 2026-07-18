@@ -213,7 +213,7 @@ async def test_dashboard_assets_expose_complete_operator_interface(
     assert 'id="cast-state"' not in html
     assert 'id="cast-detail"' not in html
     assert 'class="readout-label"' not in html
-    assert 'id="autocast-status"' not in html
+    assert 'id="autocast-status" role="timer"' in html
     assert "Selected output" not in html
     assert "Now showing /" not in javascript
     assert "Previous /" not in javascript
@@ -247,6 +247,9 @@ async def test_dashboard_assets_expose_complete_operator_interface(
     assert "output?.available_actions?.[command] === true" in javascript
     assert 'actionAvailable(output, "stop")' in javascript
     assert 'output.autocast_enabled ? "Disable autocast" : "Enable autocast"' in javascript
+    assert "output.autocast_remaining_seconds" in javascript
+    assert "Autocast in ${remaining}s" in javascript
+    assert "window.setInterval(renderAutocastControl, 250)" in javascript
     assert "const canUseRotation = output.autocast_enabled" in javascript
     assert "rotation.disabled = !canUseRotation" in javascript
     assert 'performControl(state.selectedOutputId, "stop")' in javascript

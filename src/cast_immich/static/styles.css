@@ -55,6 +55,9 @@ h1 { max-width: 650px; margin: 0; font-size: clamp(3.2rem, 6vw, 6rem); line-heig
 h2 { margin: 0; font-size: 2rem; letter-spacing: -.025em; }
 .stage-note { max-width: 32rem; margin: 2rem 0 0; color: var(--muted); line-height: 1.55; }
 .control-console { display: flex; flex-direction: column; justify-content: space-between; padding: clamp(2rem, 5vw, 4rem); color: #f7f6f2; }
+.autocast-countdown { width: fit-content; padding: .55rem .75rem; display: flex; align-items: center; gap: .55rem; border: 1px solid #59645e; border-radius: 999px; color: #f7f6f2; background: #303a35; font: 700 .68rem/1 var(--mono); letter-spacing: .04em; }
+.autocast-countdown[hidden] { display: none; }
+.countdown-dot { width: 7px; height: 7px; border-radius: 50%; background: #ff9b80; box-shadow: 0 0 0 4px rgba(255, 155, 128, .12); }
 .source-control { margin-top: 1.5rem; color: #b8bfba; }
 .source-control label { margin-top: .65rem; }
 .source-control select, .source-control input { margin-top: .2rem; border-color: #46504b; color: #f7f6f2; background: #242d29; }

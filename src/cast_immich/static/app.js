@@ -1,10 +1,10 @@
 "use strict";
 
 const state = {
-  csrf: "", revision: 0, config: null, dirty: false, timer: null,
+  csrf: "", revision: 0, config: null, dirty: false, timer: null, countdownTimer: null,
   mode: "setup", error: "", outputs: new Map(), histories: new Map(), historySignatures: new Map(),
   selectedOutputId: localStorage.getItem("cast-immich-output"), pendingCommands: new Map(), commandInFlight: new Set(),
-  sourceDrafts: new Map(), thumbnailCache: new Map(), pendingSeeks: new Map(),
+  sourceDrafts: new Map(), thumbnailCache: new Map(), pendingSeeks: new Map(), autocastDeadlines: new Map(),
   thumbnailKeys: new Map(), devices: [],
 };
 const form = document.querySelector("#settings-form");
@@ -123,8 +123,18 @@ function renderAutocastControl() {
   const output = state.outputs.get(outputId);
   if (!output) return;
   const button = document.querySelector("#autocast-toggle");
+  const status = document.querySelector("#autocast-status");
   button.classList.toggle("autocast-off", !output.autocast_enabled);
   button.querySelector("span:last-child").textContent = output.autocast_enabled ? "Disable autocast" : "Enable autocast";
+  const deadline = state.autocastDeadlines.get(outputId);
+  status.hidden = !output.autocast_enabled || deadline === undefined;
+  if (!status.hidden) {
+    const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+    const label = remaining > 0 ? `Autocast in ${remaining}s` : "Starting autocast…";
+    if (status.querySelector("span:last-child").textContent !== label) {
+      status.querySelector("span:last-child").textContent = label;
+    }
+  }
 }
 
 function renderSelectedWorkspace() {
@@ -175,6 +185,14 @@ function renderStatus(payload) {
   state.mode = payload.mode || "setup";
   state.error = payload.error || "";
   state.outputs = new Map((payload.outputs || []).map(output => [output.id, output]));
+  for (const output of state.outputs.values()) {
+    if (typeof output.autocast_remaining_seconds === "number") {
+      state.autocastDeadlines.set(output.id, Date.now() + output.autocast_remaining_seconds * 1000);
+    } else state.autocastDeadlines.delete(output.id);
+  }
+  for (const outputId of [...state.autocastDeadlines.keys()]) {
+    if (!state.outputs.has(outputId)) state.autocastDeadlines.delete(outputId);
+  }
   if (!state.outputs.has(state.selectedOutputId)) state.selectedOutputId = state.outputs.keys().next().value || null;
   if (state.selectedOutputId) localStorage.setItem("cast-immich-output", state.selectedOutputId);
   document.querySelector("#service-mode").textContent = titleCase(state.mode);
@@ -826,6 +844,7 @@ async function boot() {
   catch (error) { notify(error.message, true); }
   document.querySelector("#discover-button").click();
   state.timer = window.setInterval(refresh, 3500);
+  state.countdownTimer = window.setInterval(renderAutocastControl, 250);
 }
 
 boot();
