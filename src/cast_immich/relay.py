@@ -15,7 +15,7 @@ from uuid import UUID
 import aiohttp
 import qrcode  # type: ignore[import-untyped]
 from aiohttp import web
-from PIL import Image, ImageDraw, ImageFont, ImageOps, UnidentifiedImageError
+from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageStat, UnidentifiedImageError
 
 from .config import RelaySettings
 from .immich import Asset, AssetUnavailable, MediaType, Preview
@@ -373,8 +373,7 @@ def _normalize_preview(
             if location or date:
                 _draw_metadata(image, location, date)
             if web_qr is not None:
-                margin = max(12, min(image.size) // 20)
-                image.paste(web_qr, (margin, image.height - web_qr.height - margin))
+                _draw_web_qr(image, web_qr)
             output = io.BytesIO()
             image.save(output, format="JPEG", quality=90, optimize=True)
     except (OSError, UnidentifiedImageError):
@@ -419,6 +418,28 @@ def _draw_metadata(image: Image.Image, location: str | None, date: str | None) -
 
 def _draw_location(image: Image.Image, location: str) -> None:
     _draw_metadata(image, location, None)
+
+
+def _draw_web_qr(image: Image.Image, qr: Image.Image) -> None:
+    margin = max(12, min(image.size) // 20)
+    padding = max(2, qr.width // 12)
+    width, height = qr.width + padding * 2, qr.height + padding * 2
+    left, top = margin, image.height - height - margin
+    sample = image.crop((left, top, left + width, top + height)).convert("L")
+    luminance = ImageStat.Stat(sample).mean[0]
+    dark_background = luminance < 145
+    background = (0, 0, 0, 155) if dark_background else (255, 255, 255, 175)
+    module = (255, 255, 255, 245) if dark_background else (0, 0, 0, 240)
+
+    badge = Image.new("RGBA", (width, height))
+    draw = ImageDraw.Draw(badge)
+    draw.rounded_rectangle(
+        (0, 0, width - 1, height - 1), radius=max(4, padding * 2), fill=background
+    )
+    module_mask = ImageOps.invert(qr.convert("L"))
+    modules = Image.new("RGBA", qr.size, module)
+    badge.paste(modules, (padding, padding), module_mask)
+    image.paste(badge, (left, top), badge)
 
 
 def _make_qr(url: str, size: int = 1) -> Image.Image:

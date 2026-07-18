@@ -12,7 +12,7 @@ from PIL import Image, ImageChops
 
 from cast_immich.config import ImmichSettings, RelaySettings
 from cast_immich.immich import Asset, ImmichClient, MediaType, Preview
-from cast_immich.relay import ImageRelay, _draw_metadata
+from cast_immich.relay import ImageRelay, _draw_metadata, _draw_web_qr, _make_qr
 
 ASSET_ID = UUID("12345678-1234-4234-8234-123456789abc")
 
@@ -32,6 +32,32 @@ def test_metadata_stays_inside_title_safe_right_margin() -> None:
     bounds = ImageChops.difference(original, image).getbbox()
     assert bounds is not None
     assert bounds[2] <= image.width - min(image.size) // 20 + 1
+
+
+def test_web_qr_badge_adapts_to_background_brightness() -> None:
+    qr = _make_qr("http://192.168.1.5:8080/")
+    dark = Image.new("RGB", (1280, 720), (40, 40, 40))
+    light = Image.new("RGB", (1280, 720), (220, 220, 220))
+
+    _draw_web_qr(dark, qr)
+    _draw_web_qr(light, qr)
+
+    margin = min(dark.size) // 20
+    padding = max(2, qr.width // 12)
+    top = dark.height - qr.height - padding * 2 - margin
+    module_x, module_y = next(
+        (x, y)
+        for y in range(qr.height)
+        for x in range(qr.width)
+        if qr.getpixel((x, y)) == (0, 0, 0)
+    )
+    dark_module = dark.getpixel((margin + padding + module_x, top + padding + module_y))
+    light_module = light.getpixel((margin + padding + module_x, top + padding + module_y))
+
+    assert min(dark_module) > 220
+    assert max(light_module) < 30
+    assert max(dark.getpixel((margin + 1, top + qr.height // 2))) < 40
+    assert min(light.getpixel((margin + 1, top + qr.height // 2))) > 220
 
 
 class Source:
