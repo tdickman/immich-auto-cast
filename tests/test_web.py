@@ -23,6 +23,7 @@ from cast_immich.runtime import (
 )
 from cast_immich.web import (
     AUTH_COOKIE,
+    AUTH_COOKIE_MAX_AGE,
     CSRF_HEADER,
     MUTATION_HEADER,
     SECURITY_HEADERS,
@@ -141,8 +142,8 @@ async def management() -> tuple[TestClient[Any, Any], FakeSupervisor, str]:
     )
     await client.start_server()
     origin = str(client.make_url("/")).rstrip("/")
-    authenticated = await client.get(f"/?password={WEB_PASSWORD}", allow_redirects=False)
-    assert authenticated.status == 302
+    authenticated = await client.get(f"/?password={WEB_PASSWORD}")
+    assert authenticated.status == 200
     try:
         yield client, supervisor, origin
     finally:
@@ -159,7 +160,7 @@ def mutation_headers(origin: str, **extra: str) -> dict[str, str]:
     }
 
 
-async def test_password_is_required_once_per_browser_and_removed_from_url() -> None:
+async def test_password_is_required_once_per_browser_and_preserved_for_shortcuts() -> None:
     supervisor = FakeSupervisor()
     client = TestClient(
         TestServer(create_management_app(supervisor, password=WEB_PASSWORD, csrf_token=CSRF))
@@ -168,17 +169,16 @@ async def test_password_is_required_once_per_browser_and_removed_from_url() -> N
     try:
         unauthorized = await client.get("/")
         invalid = await client.get("/?password=wrong", allow_redirects=False)
-        authenticated = await client.get(
-            f"/?view=controls&password={WEB_PASSWORD}", allow_redirects=False
-        )
+        authenticated = await client.get(f"/?view=controls&password={WEB_PASSWORD}")
         page = await client.get("/")
 
         assert unauthorized.status == invalid.status == 401
-        assert authenticated.status == 302
-        assert authenticated.headers["Location"] == "/?view=controls"
+        assert authenticated.status == 200
+        assert authenticated.url.query == {"view": "controls", "password": WEB_PASSWORD}
         cookie = authenticated.cookies[AUTH_COOKIE]
         assert cookie["httponly"] is True
         assert cookie["samesite"] == "Strict"
+        assert cookie["max-age"] == str(AUTH_COOKIE_MAX_AGE)
         assert WEB_PASSWORD not in cookie.value
         assert page.status == 200
     finally:

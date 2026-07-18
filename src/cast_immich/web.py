@@ -28,7 +28,7 @@ MUTATION_HEADER = "X-Cast-Immich-Request"
 CSRF_HEADER = "X-CSRF-Token"
 PASSWORD_PARAMETER = "password"
 AUTH_COOKIE = "cast-immich-auth"
-AUTH_COOKIE_MAX_AGE = 365 * 24 * 60 * 60
+AUTH_COOKIE_MAX_AGE = 10 * 365 * 24 * 60 * 60
 SECURITY_HEADERS = {
     "Cache-Control": "no-store",
     "Content-Security-Policy": (
@@ -55,29 +55,15 @@ def create_management_app(
 
     @web.middleware
     async def security_headers(request: web.Request, handler: Any) -> web.StreamResponse:
+        password_valid = _valid_password(request, password)
         if _request_origin(request, allowed_hosts) is None:
             response = web.json_response(
                 {"outcome": "invalid_host", "error": "management host is not allowed"},
                 status=421,
             )
-        elif _valid_password(request, password):
-            query = [
-                (key, value)
-                for key, value in request.query.items()
-                if key != PASSWORD_PARAMETER
-            ]
-            response = web.Response(
-                status=302, headers={"Location": str(request.rel_url.with_query(query))}
-            )
-            response.set_cookie(
-                AUTH_COOKIE,
-                auth_token,
-                max_age=AUTH_COOKIE_MAX_AGE,
-                httponly=True,
-                samesite="Strict",
-                secure=request.scheme == "https",
-            )
-        elif not secrets.compare_digest(request.cookies.get(AUTH_COOKIE, ""), auth_token):
+        elif not password_valid and not secrets.compare_digest(
+            request.cookies.get(AUTH_COOKIE, ""), auth_token
+        ):
             response = web.json_response(
                 {"outcome": "authentication_required", "error": "valid password required"},
                 status=401,
@@ -95,6 +81,15 @@ def create_management_app(
                     {"outcome": "http_error", "error": error.reason},
                     status=error.status,
                     headers=headers,
+                )
+            if password_valid:
+                response.set_cookie(
+                    AUTH_COOKIE,
+                    auth_token,
+                    max_age=AUTH_COOKIE_MAX_AGE,
+                    httponly=True,
+                    samesite="Strict",
+                    secure=request.scheme == "https",
                 )
         if not isinstance(response, web.StreamResponse):
             raise TypeError("management handler returned an invalid response")

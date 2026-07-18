@@ -18,7 +18,7 @@ cp config.example.toml config.toml
 chmod 600 config.toml
 ```
 
-Start the service and open the dashboard locally at `http://127.0.0.1:8080/?password=VALUE`, using the value in `web-password`. It remains available in setup mode when `config.toml` is absent or invalid. The service generates `web-password` with mode `0600` on first start if it does not exist; you can create or replace that file with your own password before starting the service. A valid first request authorizes that browser with an HttpOnly cookie and removes the password from the address bar.
+Start the service and open the dashboard locally at `http://127.0.0.1:8080/?password=VALUE`, using the value in `web-password`. It remains available in setup mode when `config.toml` is absent or invalid. The service generates `web-password` with mode `0600` on first start if it does not exist; you can create or replace that file with your own password before starting the service. A valid request authorizes that browser with a ten-year HttpOnly cookie, subject to browser retention limits. The password remains in the initial URL so Android home-screen shortcuts, which may use separate browser storage, retain authenticated access and renew the cookie whenever launched.
 
 ```console
 export CAST_IMMICH_API_KEY='...'
