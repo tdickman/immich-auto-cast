@@ -16,7 +16,7 @@ from .cast import DiscoveryError
 from .config import default_form_values
 from .coordinator import Command, CommandResult, CoordinatorSnapshot
 from .history import DisplayRecord, HistoryError
-from .immich import AssetUnavailable, ImmichError
+from .immich import AssetUnavailable, ImmichError, PhotoSource, SourceKind
 from .relay import ALLOWED_IMAGE_TYPES
 from .runtime import ApplyStatus, ConfigSnapshot, RuntimeSnapshot, RuntimeSupervisor
 
@@ -243,6 +243,23 @@ def create_management_app(
             }
         )
 
+    async def people(_request: web.Request) -> web.Response:
+        try:
+            items = await supervisor.people()
+        except ImmichError:
+            return _error(502, "people_upstream_error", "people are unavailable")
+        coordinator = supervisor.snapshot.coordinator
+        return web.json_response(
+            {
+                "selected_person_id": (
+                    str(coordinator.selected_person)
+                    if coordinator is not None and coordinator.selected_person is not None
+                    else None
+                ),
+                "people": [{"id": str(person.id), "name": person.name} for person in items],
+            }
+        )
+
     async def source(request: web.Request) -> web.Response:
         failure = _mutation_failure(request, token, allowed_hosts)
         if failure is not None:
@@ -250,20 +267,39 @@ def create_management_app(
         body = await _json_object(request)
         if isinstance(body, web.Response):
             return body
-        value = body.get("album_id")
+        legacy_album_request = "kind" not in body and "album_id" in body
+        kind_value = body.get("kind")
+        if kind_value is None and "album_id" in body:
+            kind_value = "album" if body.get("album_id") is not None else "timeline"
         try:
-            album_id = None if value is None else UUID(value)
+            kind = SourceKind(kind_value or "timeline")
         except (TypeError, ValueError):
-            return _error(400, "invalid_request", "album_id must be a UUID or null")
+            return _error(400, "invalid_request", "kind must be timeline, album, person, or search")
+        source_id: UUID | None = None
+        query: str | None = None
+        if kind in {SourceKind.ALBUM, SourceKind.PERSON}:
+            value = body.get("id", body.get("album_id"))
+            try:
+                source_id = UUID(value)
+            except (TypeError, ValueError):
+                return _error(400, "invalid_request", "source id must be a UUID")
+        elif kind is SourceKind.SEARCH:
+            value = body.get("query")
+            if not isinstance(value, str) or not value.strip() or len(value.strip()) > 200:
+                return _error(400, "invalid_request", "query must contain 1 to 200 characters")
+            query = value.strip()
+        selected = PhotoSource(kind, source_id, query)
         try:
-            applied = await supervisor.select_source(album_id)
+            applied = await supervisor.select_source(
+                source_id if legacy_album_request and kind is SourceKind.ALBUM else selected
+            )
         except ImmichError:
-            return _error(502, "albums_upstream_error", "albums are unavailable")
+            return _error(502, "source_upstream_error", "photo source is unavailable")
         if not applied:
-            return _error(409, "source_not_applied", "album is unavailable or playback is busy")
-        return web.json_response(
-            {"outcome": "applied", "selected_album_id": str(album_id) if album_id else None}
-        )
+            return _error(
+                409, "source_not_applied", "photo source is unavailable or playback is busy"
+            )
+        return web.json_response({"outcome": "applied", "source": _source_json(selected)})
 
     async def seek(request: web.Request) -> web.Response:
         failure = _mutation_failure(request, token, allowed_hosts)
@@ -335,6 +371,7 @@ def create_management_app(
     app.router.add_post("/api/controls/{command}", control)
     app.router.add_post("/api/reconnect", reconnect)
     app.router.add_get("/api/albums", albums)
+    app.router.add_get("/api/people", people)
     app.router.add_post("/api/source", source)
     app.router.add_post("/api/seek", seek)
     app.router.add_get("/api/history", history)
@@ -463,12 +500,28 @@ def _runtime_json(snapshot: RuntimeSnapshot) -> dict[str, Any]:
         "generation": snapshot.generation,
         "coordinator": _coordinator_json(coordinator),
         "error": snapshot.error,
+        "autocast_enabled": coordinator.autocast_enabled if coordinator is not None else True,
+        "source": (
+            _source_json(
+                PhotoSource(
+                    coordinator.source_kind,
+                    coordinator.selected_album or coordinator.selected_person,
+                    coordinator.search_query,
+                )
+            )
+            if coordinator is not None
+            else _source_json(PhotoSource())
+        ),
         "available_actions": {
             "pause": active and rotation_enabled,
             "enable": active and not rotation_enabled,
             "next": owned,
             "stop": owned,
             "reconnect": active,
+            "autocast_enable": (
+                active and coordinator is not None and not coordinator.autocast_enabled
+            ),
+            "autocast_disable": active and coordinator is not None and coordinator.autocast_enabled,
         },
     }
 
@@ -487,6 +540,14 @@ def _coordinator_json(snapshot: CoordinatorSnapshot | None) -> dict[str, Any] | 
         "selected_album_id": (
             str(snapshot.selected_album) if snapshot.selected_album is not None else None
         ),
+    }
+
+
+def _source_json(source: PhotoSource) -> dict[str, str | None]:
+    return {
+        "kind": source.kind.value,
+        "id": str(source.id) if source.id is not None else None,
+        "query": source.query,
     }
 
 

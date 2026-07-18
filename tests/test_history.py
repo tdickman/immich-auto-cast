@@ -21,6 +21,18 @@ def test_rotation_enabled_persists_atomically(tmp_path: Path) -> None:
     assert path.stat().st_mode & 0o777 == 0o600
 
 
+def test_autocast_enabled_defaults_on_and_persists(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    store = HistoryStore(path)
+
+    assert store.load().autocast_enabled is True
+    store.set_autocast_enabled(False)
+
+    state = HistoryStore(path).load()
+    assert state.autocast_enabled is False
+    assert state.rotation_enabled is True
+
+
 def test_duplicate_load_is_inserted_once(tmp_path: Path) -> None:
     store = HistoryStore(tmp_path / "state.json")
     confirmed = datetime(2026, 7, 17, 12, tzinfo=UTC)

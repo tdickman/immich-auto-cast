@@ -10,7 +10,7 @@ import pytest
 
 from cast_immich.cast import CastEvent, EventKind, MediaStatus, ReceiverStatus
 from cast_immich.config import RotationSettings
-from cast_immich.coordinator import CommandResult, Coordinator, State
+from cast_immich.coordinator import Command, CommandResult, Coordinator, State
 from cast_immich.history import DisplayRecord, HistoryState
 from cast_immich.immich import Asset
 
@@ -59,16 +59,27 @@ class Cast:
 
 
 class History:
-    def __init__(self, *, enabled: bool = True, fail_records: bool = False) -> None:
+    def __init__(
+        self, *, enabled: bool = True, autocast: bool = True, fail_records: bool = False
+    ) -> None:
         self.enabled = enabled
+        self.autocast = autocast
         self.fail_records = fail_records
         self.records: list[DisplayRecord] = []
 
     def load(self) -> HistoryState:
-        return HistoryState(rotation_enabled=self.enabled, records=tuple(self.records))
+        return HistoryState(
+            rotation_enabled=self.enabled,
+            records=tuple(self.records),
+            autocast_enabled=self.autocast,
+        )
 
     def set_rotation_enabled(self, enabled: bool) -> HistoryState:
         self.enabled = enabled
+        return self.load()
+
+    def set_autocast_enabled(self, enabled: bool) -> HistoryState:
+        self.autocast = enabled
         return self.load()
 
     def record_display(self, load_id: str, asset_id: str) -> DisplayRecord:
@@ -180,6 +191,28 @@ async def test_stable_idle_sends_exactly_one_load_and_confirms_ownership() -> No
     )
     assert coordinator.snapshot.state is State.OWNED
     assert len(cast.loads) == 1
+    await coordinator.close()
+
+
+@pytest.mark.asyncio
+async def test_disabled_autocast_does_not_load_and_can_be_enabled() -> None:
+    history = History(autocast=False)
+    coordinator, queue, selector, cast = make_coordinator(history)
+
+    await observe_idle(coordinator)
+    await asyncio.sleep(0.01)
+
+    assert queue.empty()
+    assert selector.calls == 0
+    assert cast.loads == []
+    assert coordinator.snapshot.autocast_enabled is False
+
+    enabling = asyncio.create_task(coordinator.command(Command.AUTOCAST_ENABLE, "enable-autocast"))
+    await drain_one(queue, coordinator)
+
+    assert await enabling is CommandResult.APPLIED
+    assert history.autocast is True
+    assert coordinator.snapshot.autocast_enabled is True
     await coordinator.close()
 
 

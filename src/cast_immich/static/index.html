@@ -32,11 +32,26 @@
             <span class="readout-label">Receiver</span>
             <strong id="cast-state">Connecting</strong>
             <span id="cast-detail">Checking playback</span>
-            <label class="source-control">Photo source
-              <select id="album-select">
-                <option value="">Any photo from the timeline</option>
-              </select>
-            </label>
+            <div class="source-control">
+              <label>Photo source
+                <select id="source-kind">
+                  <option value="timeline">Any photo from the timeline</option>
+                  <option value="album">Album</option>
+                  <option value="person">Person</option>
+                  <option value="search">AI search</option>
+                </select>
+              </label>
+              <label id="album-source">Album
+                <select id="album-select"><option value="">Choose an album</option></select>
+              </label>
+              <label id="person-source">Person
+                <select id="person-select"><option value="">Choose a person</option></select>
+              </label>
+              <form id="search-source">
+                <label>AI search term<input id="search-query" maxlength="200" placeholder="e.g. snowy mountains"></label>
+                <button class="source-apply" type="submit">Use search</button>
+              </form>
+            </div>
           </div>
           <div class="transport" aria-label="Playback controls">
             <button class="control-button primary" id="rotation-toggle" type="button">
@@ -47,6 +62,9 @@
             </button>
             <button class="control-button" id="reconnect-button" type="button">
               <span class="button-mark">↻</span><span>Reconnect</span>
+            </button>
+            <button class="control-button" id="autocast-toggle" type="button">
+              <span class="button-mark">A</span><span>Disable autocast</span>
             </button>
             <button class="control-button danger" id="stop-button" type="button">
               <span class="button-mark">■</span><span>Stop cast</span>
@@ -142,7 +160,8 @@
             <fieldset>
             <legend>Rotation</legend>
             <div class="field-pair">
-              <label>Idle debounce<input name="rotation.idle_debounce" type="number" min="0.1" step="0.1" required></label>
+              <label>Idle status debounce<input name="rotation.idle_debounce" type="number" min="0.1" step="0.1" required></label>
+              <label>Autocast idle delay<input name="rotation.autocast_delay" type="number" min="0.1" step="0.1" required></label>
               <label>Failure cooldown<input name="rotation.cooldown" type="number" min="0.1" step="0.1" required></label>
             </div>
             <div class="field-pair">

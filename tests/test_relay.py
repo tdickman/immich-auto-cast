@@ -97,6 +97,35 @@ async def test_location_is_drawn_in_the_bottom_right_corner() -> None:
 
 
 @pytest.mark.asyncio
+async def test_date_is_drawn_beneath_location() -> None:
+    class LocatedSource(Source):
+        async def fetch_location(self, asset_id: UUID) -> str | None:
+            assert asset_id == ASSET_ID
+            return "Portland, Oregon"
+
+    class MetadataSource(Source):
+        async def fetch_metadata(self, asset_id: UUID) -> tuple[str | None, str | None]:
+            assert asset_id == ASSET_ID
+            return "Portland, Oregon", "July 4, 2026"
+
+    body = image_bytes((640, 360))
+    location_only = ImageRelay(settings(), LocatedSource(Preview(body, "image/png")))
+    metadata = ImageRelay(settings(), MetadataSource(Preview(body, "image/png")))
+
+    await location_only.mint(ASSET_ID)
+    await metadata.mint(ASSET_ID)
+
+    location_preview = next(iter(location_only._tokens.values())).preview
+    metadata_preview = next(iter(metadata._tokens.values())).preview
+    with (
+        Image.open(io.BytesIO(location_preview.body)) as location_image,
+        Image.open(io.BytesIO(metadata_preview.body)) as metadata_image,
+    ):
+        difference = ImageChops.difference(location_image, metadata_image)
+        assert difference.crop((320, 180, 640, 360)).getbbox() is not None
+
+
+@pytest.mark.asyncio
 async def test_preloaded_preview_is_reused_by_next_load() -> None:
     class MultiSource:
         def __init__(self) -> None:

@@ -28,6 +28,7 @@ class HistoryState:
     rotation_enabled: bool = True
     records: tuple[DisplayRecord, ...] = ()
     version: int = 1
+    autocast_enabled: bool = True
 
 
 class HistoryStore:
@@ -47,7 +48,24 @@ class HistoryStore:
             raise HistoryError("rotation_enabled must be a boolean")
         with self._lock:
             current = self._load_unlocked()
-            state = HistoryState(rotation_enabled=enabled, records=current.records)
+            state = HistoryState(
+                rotation_enabled=enabled,
+                records=current.records,
+                autocast_enabled=current.autocast_enabled,
+            )
+            self._write_unlocked(state)
+            return state
+
+    def set_autocast_enabled(self, enabled: bool) -> HistoryState:
+        if not isinstance(enabled, bool):
+            raise HistoryError("autocast_enabled must be a boolean")
+        with self._lock:
+            current = self._load_unlocked()
+            state = HistoryState(
+                rotation_enabled=current.rotation_enabled,
+                records=current.records,
+                autocast_enabled=enabled,
+            )
             self._write_unlocked(state)
             return state
 
@@ -82,6 +100,7 @@ class HistoryStore:
             state = HistoryState(
                 rotation_enabled=current.rotation_enabled,
                 records=tuple(records[: self.MAX_RECORDS]),
+                autocast_enabled=current.autocast_enabled,
             )
             self._write_unlocked(state)
             return record
@@ -94,8 +113,13 @@ class HistoryStore:
             if not isinstance(raw, dict) or raw.get("version") != self.VERSION:
                 raise ValueError("unsupported version")
             enabled = raw.get("rotation_enabled")
+            autocast_enabled = raw.get("autocast_enabled", True)
             records_data = raw.get("records")
-            if not isinstance(enabled, bool) or not isinstance(records_data, list):
+            if (
+                not isinstance(enabled, bool)
+                or not isinstance(autocast_enabled, bool)
+                or not isinstance(records_data, list)
+            ):
                 raise ValueError("invalid state fields")
             records = tuple(self._parse_record(item) for item in records_data)
             if len(records) > self.MAX_RECORDS:
@@ -104,7 +128,11 @@ class HistoryStore:
                 raise ValueError("duplicate load IDs")
             if tuple(sorted(records, key=lambda item: item.confirmed_at, reverse=True)) != records:
                 raise ValueError("display records are not newest first")
-            return HistoryState(rotation_enabled=enabled, records=records)
+            return HistoryState(
+                rotation_enabled=enabled,
+                records=records,
+                autocast_enabled=autocast_enabled,
+            )
         except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError):
             raise HistoryError("cannot read history state") from None
 
@@ -127,6 +155,7 @@ class HistoryStore:
         document = {
             "version": self.VERSION,
             "rotation_enabled": state.rotation_enabled,
+            "autocast_enabled": state.autocast_enabled,
             "records": [
                 {
                     "event_id": record.event_id,

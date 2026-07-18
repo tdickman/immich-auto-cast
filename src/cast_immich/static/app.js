@@ -61,8 +61,21 @@ function renderStatus(payload) {
   document.querySelector("#next-button").disabled = !owned;
   document.querySelector("#stop-button").disabled = !owned;
   document.querySelector("#reconnect-button").disabled = !active;
+  document.querySelector("#source-kind").disabled = !active || state.changingSource;
   document.querySelector("#album-select").disabled = !active || state.changingSource;
-  if (!state.changingSource) document.querySelector("#album-select").value = coordinator?.selected_album_id || "";
+  document.querySelector("#person-select").disabled = !active || state.changingSource;
+  const autocast = payload.autocast_enabled ?? true;
+  const autocastToggle = document.querySelector("#autocast-toggle");
+  autocastToggle.disabled = !active;
+  autocastToggle.dataset.command = autocast ? "autocast_disable" : "autocast_enable";
+  autocastToggle.querySelector("span:last-child").textContent = autocast ? "Disable autocast" : "Enable autocast";
+  if (!state.changingSource && payload.source) {
+    document.querySelector("#source-kind").value = payload.source.kind;
+    document.querySelector("#album-select").value = payload.source.kind === "album" ? payload.source.id : "";
+    document.querySelector("#person-select").value = payload.source.kind === "person" ? payload.source.id : "";
+    if (payload.source.kind === "search") document.querySelector("#search-query").value = payload.source.query || "";
+    showSourceControl(payload.source.kind);
+  }
 }
 
 function setFormValues(values) {
@@ -174,6 +187,35 @@ async function loadAlbums() {
   select.value = payload.selected_album_id || "";
 }
 
+async function loadPeople() {
+  const payload = await request("/api/people");
+  const select = document.querySelector("#person-select");
+  select.replaceChildren(new Option("Choose a person", ""));
+  payload.people.forEach(person => select.add(new Option(person.name, person.id)));
+  select.value = payload.selected_person_id || "";
+}
+
+function showSourceControl(kind) {
+  document.querySelector("#album-source").style.display = kind === "album" ? "grid" : "none";
+  document.querySelector("#person-source").style.display = kind === "person" ? "grid" : "none";
+  document.querySelector("#search-source").style.display = kind === "search" ? "block" : "none";
+}
+
+async function applySource(source, message) {
+  state.changingSource = true;
+  try {
+    await mutate("/api/source", source);
+    state.gallerySignature = "";
+    notify(message);
+    await refresh();
+  } catch (error) {
+    notify(error.message, true);
+    await Promise.all([loadAlbums(), loadPeople()]);
+  } finally {
+    state.changingSource = false;
+  }
+}
+
 function renderGallery(selector, records, emptyMessage, renderRecord) {
   const list = document.querySelector(selector);
   if (!records.length) {
@@ -274,6 +316,7 @@ document.querySelector("#reset-button").addEventListener("click", () => {
   notify("Draft reset");
 });
 document.querySelector("#rotation-toggle").addEventListener("click", event => performControl(event.currentTarget.dataset.command));
+document.querySelector("#autocast-toggle").addEventListener("click", event => performControl(event.currentTarget.dataset.command));
 document.querySelector("#next-button").addEventListener("click", () => performControl("next"));
 document.querySelector("#stop-button").addEventListener("click", () => performControl("stop"));
 document.querySelector("#reconnect-button").addEventListener("click", async () => {
@@ -283,22 +326,21 @@ document.querySelector("#reconnect-button").addEventListener("click", async () =
   catch (error) { notify(error.message, true); }
   finally { button.disabled = false; }
 });
-document.querySelector("#album-select").addEventListener("change", async event => {
-  const select = event.currentTarget;
-  state.changingSource = true;
-  select.disabled = true;
-  try {
-    await mutate("/api/source", { album_id: select.value || null });
-    state.gallerySignature = "";
-    notify(select.value ? `Using ${select.selectedOptions[0].textContent}` : "Using the full timeline");
-    await refresh();
-  } catch (error) {
-    notify(error.message, true);
-    await loadAlbums();
-  } finally {
-    state.changingSource = false;
-    select.disabled = false;
-  }
+document.querySelector("#source-kind").addEventListener("change", event => {
+  const kind = event.currentTarget.value;
+  showSourceControl(kind);
+  if (kind === "timeline") applySource({ kind }, "Using the full timeline");
+});
+document.querySelector("#album-select").addEventListener("change", event => {
+  if (event.currentTarget.value) applySource({ kind: "album", id: event.currentTarget.value }, `Using ${event.currentTarget.selectedOptions[0].textContent}`);
+});
+document.querySelector("#person-select").addEventListener("change", event => {
+  if (event.currentTarget.value) applySource({ kind: "person", id: event.currentTarget.value }, `Showing ${event.currentTarget.selectedOptions[0].textContent}`);
+});
+document.querySelector("#search-source").addEventListener("submit", event => {
+  event.preventDefault();
+  const query = document.querySelector("#search-query").value.trim();
+  if (query) applySource({ kind: "search", query }, `Searching for “${query}”`);
 });
 document.querySelector("#discover-button").addEventListener("click", async event => {
   const button = event.currentTarget;
@@ -317,7 +359,7 @@ document.querySelector("#discover-button").addEventListener("click", async event
 });
 
 async function boot() {
-  try { await loadConfig(); await Promise.all([loadAlbums(), refresh()]); }
+  try { await loadConfig(); await Promise.all([loadAlbums(), loadPeople(), refresh()]); }
   catch (error) { notify(error.message, true); }
   document.querySelector("#discover-button").click();
   state.timer = window.setInterval(refresh, 3500);

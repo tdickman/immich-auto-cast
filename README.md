@@ -1,12 +1,12 @@
 # cast-immich
 
-`cast-immich` displays random Immich timeline photos on one Chromecast while the receiver is confidently idle. A trusted-LAN dashboard provides receiver selection, live controls, configuration, the previous 10 confirmed photos, and the next 10 queued photos. The service yields to paused, playing, buffering, external, and unknown sessions.
+`cast-immich` displays Immich timeline, album, person, or AI-search photos on one Chromecast while the receiver is confidently idle. A trusted-LAN dashboard provides source and receiver selection, live controls, configuration, the previous 10 confirmed photos, and the next 10 queued photos. The service yields to paused, playing, buffering, external, and unknown sessions.
 
 ## Requirements
 
 - CPython 3.13
 - [`uv`](https://docs.astral.sh/uv/)
-- Immich 3.x API key with `asset.read`, `asset.view`, and `album.read`
+- Immich 3.x API key with `asset.read`, `asset.view`, `album.read`, and `person.read`
 - Chromecast and service host on a network where mDNS and Cast traffic work
 - A TCP relay address reachable by the Chromecast
 
@@ -33,7 +33,7 @@ uv run cast-immich --config config.toml --web-host 0.0.0.0 --web-port 8080
 
 There is no dashboard login. Do not expose the management port to the public internet, an untrusted VLAN, or a public reverse proxy. Browser mutations use same-origin and CSRF defenses, but any client with direct trusted-LAN access can operate the service.
 
-The first valid configuration atomically creates `installation-id` beside the configuration. Persist this non-secret file across restarts so the service can recognize its own existing Cast session. `state.json` stores the pause setting and at most 10 confirmed display records; keep it beside the configuration and writable by the service.
+The first valid configuration atomically creates `installation-id` beside the configuration. Persist this non-secret file across restarts so the service can recognize its own existing Cast session. `state.json` stores the pause and autocast settings and at most 10 confirmed display records; keep it beside the configuration and writable by the service.
 
 ## Configuration
 
@@ -42,7 +42,8 @@ The first valid configuration atomically creates `installation-id` beside the co
 - `relay.bind_host`: local interface to listen on, normally `0.0.0.0`.
 - `relay.advertised_host`: LAN address the Chromecast uses. Loopback and unspecified addresses are rejected.
 - `rotation.interval`: seconds from confirmed display until the next selection.
-- `rotation.idle_debounce`: stable-idle period before the first load.
+- `rotation.autocast_delay`: idle time before automatic casting, 30 seconds by default. The initial startup cast has no delay.
+- `rotation.idle_debounce`: short status-stabilization setting retained for configuration compatibility.
 - `chromecast.load_timeout`: time allowed for media status to confirm a load.
 
 The dashboard validates and atomically rewrites the complete TOML configuration. Concurrent stale saves are rejected. A blank API-key field preserves the file key. When `CAST_IMMICH_API_KEY` is set, it remains authoritative and browser replacement is disabled.
@@ -51,9 +52,9 @@ Changing the Immich server origin requires entering a replacement API key in the
 
 ### Management API
 
-The dashboard uses same-origin JSON endpoints under `/api`: `status`, `config`, `discovery`, `controls/{pause|enable|next|stop}`, `reconnect`, `history`, and opaque history thumbnails. Mutation clients must first read the CSRF token from status/config, then send the exact page `Origin`, `Content-Type: application/json`, `X-Cast-Immich-Request: 1`, and `X-CSRF-Token`. Configuration writes include the current revision; controls include a stable request ID for idempotency. Command responses echo the request ID, command, outcome, and resulting sanitized status.
+The dashboard uses same-origin JSON endpoints under `/api`, including `status`, `config`, `albums`, `people`, `source`, `discovery`, `controls/{pause|enable|next|stop|autocast_enable|autocast_disable}`, `reconnect`, `history`, and opaque history thumbnails. Mutation clients must first read the CSRF token from status/config, then send the exact page `Origin`, `Content-Type: application/json`, `X-Cast-Immich-Request: 1`, and `X-CSRF-Token`. Configuration writes include the current revision; controls include a stable request ID for idempotency. Command responses echo the request ID, command, outcome, and resulting sanitized status.
 
-Only normal timeline images are selected. Archived, hidden, locked, trashed, offline, video, audio, and shared-album-only assets are excluded. Timeline-enabled partner assets can be selected because they are part of the API-key user's timeline.
+The selected source can be the normal timeline, an album, a detected person, or an Immich AI search term. Trashed, offline, video, and audio assets are always excluded; timeline mode also excludes archived, hidden, locked, and shared-album-only assets. The relayed image includes its capture date beneath the location when Immich provides that metadata.
 
 ## Network
 
@@ -78,7 +79,7 @@ Troubleshooting:
 1. Confirm `relay.advertised_host:port` is reachable from another device on the Chromecast network.
 2. Confirm UDP 5353 multicast is not blocked and client isolation is off.
 3. Confirm the UUID rather than the friendly name is configured.
-4. Confirm the Immich key has `asset.read`, `asset.view`, and `album.read`.
+4. Confirm the Immich key has `asset.read`, `asset.view`, `album.read`, and `person.read`.
 5. Confirm the API-key user has eligible timeline images.
 6. If the dashboard is remote, confirm `--web-host` is a reachable trusted-LAN interface and TCP port 8080 is allowed only from that LAN.
 

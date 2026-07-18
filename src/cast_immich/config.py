@@ -73,6 +73,7 @@ class RotationSettings:
     cooldown: float
     recent_history: int
     candidate_batch: int
+    autocast_delay: float = 30.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,6 +139,7 @@ def default_form_values() -> dict[str, dict[str, Any]]:
             "cooldown": 15,
             "recent_history": 25,
             "candidate_batch": 50,
+            "autocast_delay": 30,
         },
         "service": {"installation_id_file": "installation-id", "log_level": "INFO"},
     }
@@ -315,6 +317,7 @@ def _parse_candidate(
                     rotation.get("candidate_batch", 50), "rotation.candidate_batch", integer=True
                 )
             ),
+            float(_positive(rotation.get("autocast_delay", 30), "rotation.autocast_delay")),
         ),
         service=ServiceSettings(
             identity_path,
@@ -363,6 +366,7 @@ def _form_values(settings: Settings, path: Path) -> dict[str, dict[str, Any]]:
             "cooldown": settings.rotation.cooldown,
             "recent_history": settings.rotation.recent_history,
             "candidate_batch": settings.rotation.candidate_batch,
+            "autocast_delay": settings.rotation.autocast_delay,
         },
         "service": {
             "installation_id_file": identity_path,
@@ -411,7 +415,14 @@ def _serialize_configuration(
             "max_response_bytes",
             "max_concurrent",
         ),
-        "rotation": ("interval", "idle_debounce", "cooldown", "recent_history", "candidate_batch"),
+        "rotation": (
+            "interval",
+            "idle_debounce",
+            "autocast_delay",
+            "cooldown",
+            "recent_history",
+            "candidate_batch",
+        ),
         "service": ("installation_id_file", "log_level", "revision"),
     }
     values["immich"]["api_key"] = file_api_key

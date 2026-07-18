@@ -27,7 +27,15 @@ from .config import (
 )
 from .coordinator import Command, CommandResult, Coordinator, CoordinatorEvent, CoordinatorSnapshot
 from .history import HistoryState, HistoryStore
-from .immich import Album, AssetUnavailable, ImmichClient, Preview
+from .immich import (
+    Album,
+    AssetUnavailable,
+    ImmichClient,
+    Person,
+    PhotoSource,
+    Preview,
+    SourceKind,
+)
 from .relay import ImageRelay
 
 
@@ -87,7 +95,9 @@ class ComponentGraph(Protocol):
 
     async def albums(self) -> tuple[Album, ...]: ...
 
-    async def select_source(self, album_id: UUID | None) -> bool: ...
+    async def people(self) -> tuple[Person, ...]: ...
+
+    async def select_source(self, source: PhotoSource | UUID | None) -> bool: ...
 
     async def reconnect(self) -> None: ...
 
@@ -207,10 +217,26 @@ class ServiceGraph:
     async def albums(self) -> tuple[Album, ...]:
         return await self._immich.list_albums()
 
-    async def select_source(self, album_id: UUID | None) -> bool:
-        if album_id is not None and album_id not in {album.id for album in await self.albums()}:
+    async def people(self) -> tuple[Person, ...]:
+        return await self._immich.list_people()
+
+    async def select_source(self, source: PhotoSource | UUID | None) -> bool:
+        normalized = (
+            source
+            if isinstance(source, PhotoSource)
+            else PhotoSource(SourceKind.ALBUM, source)
+            if source is not None
+            else PhotoSource()
+        )
+        if normalized.kind is SourceKind.ALBUM and normalized.id not in {
+            album.id for album in await self.albums()
+        }:
             return False
-        return await self._coordinator.select_source(album_id)
+        if normalized.kind is SourceKind.PERSON and normalized.id not in {
+            person.id for person in await self.people()
+        }:
+            return False
+        return await self._coordinator.select_source(normalized)
 
     async def reconnect(self) -> None:
         await self._cast.reconnect()
@@ -510,11 +536,17 @@ class RuntimeSupervisor:
                 return ()
             return await self._graph.albums()
 
-    async def select_source(self, album_id: UUID | None) -> bool:
+    async def people(self) -> tuple[Person, ...]:
+        async with self._lock:
+            if self._graph is None or self._closed:
+                return ()
+            return await self._graph.people()
+
+    async def select_source(self, source: PhotoSource | UUID | None) -> bool:
         async with self._lock:
             if self._graph is None or self._closed:
                 return False
-            return await self._graph.select_source(album_id)
+            return await self._graph.select_source(source)
 
     async def reconnect(self) -> bool:
         async with self._lock:

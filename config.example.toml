@@ -20,6 +20,7 @@ max_concurrent = 4
 [rotation]
 interval = 60.0
 idle_debounce = 3.0
+autocast_delay = 30.0
 cooldown = 15.0
 recent_history = 25
 candidate_batch = 50

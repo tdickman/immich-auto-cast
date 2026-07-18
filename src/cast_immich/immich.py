@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import random
 from dataclasses import dataclass
+from datetime import datetime
+from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
@@ -31,6 +33,21 @@ class AssetUnavailable(ImmichError):
 class Asset:
     id: UUID
     location: str | None = None
+    date: str | None = None
+
+
+class SourceKind(StrEnum):
+    TIMELINE = "timeline"
+    ALBUM = "album"
+    PERSON = "person"
+    SEARCH = "search"
+
+
+@dataclass(frozen=True, slots=True)
+class PhotoSource:
+    kind: SourceKind = SourceKind.TIMELINE
+    id: UUID | None = None
+    query: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +55,12 @@ class Album:
     id: UUID
     name: str
     asset_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class Person:
+    id: UUID
+    name: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,7 +78,7 @@ class ImmichClient:
         self._settings = settings
         self._session = session
         self._owns_session = session is None
-        self._locations: dict[UUID, str | None] = {}
+        self._metadata: dict[UUID, tuple[str | None, str | None]] = {}
 
     async def __aenter__(self) -> ImmichClient:
         await self.start()
@@ -93,27 +116,48 @@ class ImmichClient:
         count: int,
         album_id: UUID | None,
     ) -> tuple[Asset, ...]:
-        payload = {
+        source = PhotoSource(SourceKind.ALBUM, album_id) if album_id else PhotoSource()
+        return await self.select_assets_for(recent, batch_size, count, source)
+
+    async def select_assets_for(
+        self,
+        recent: set[UUID],
+        batch_size: int,
+        count: int,
+        source: PhotoSource,
+    ) -> tuple[Asset, ...]:
+        payload: dict[str, Any] = {
             "type": "IMAGE",
             "withDeleted": False,
             "isOffline": False,
             "withExif": True,
             "size": min(max(batch_size, count, 1), 1000),
         }
-        if album_id is None:
+        if source.kind is SourceKind.TIMELINE:
             payload["visibility"] = "timeline"
+        elif source.kind is SourceKind.ALBUM and source.id is not None:
+            payload["albumIds"] = [str(source.id)]
+        elif source.kind is SourceKind.PERSON and source.id is not None:
+            payload["personIds"] = [str(source.id)]
+        elif source.kind is SourceKind.SEARCH and source.query:
+            payload["query"] = source.query
+            payload["page"] = 1
         else:
-            payload["albumIds"] = [str(album_id)]
-        data = await self._json_request("POST", "/api/search/random", json=payload)
-        if not isinstance(data, list):
+            raise ValueError("invalid photo source")
+        path = "/api/search/smart" if source.kind is SourceKind.SEARCH else "/api/search/random"
+        data = await self._json_request("POST", path, json=payload)
+        values = data.get("assets", {}).get("items") if isinstance(data, dict) else data
+        if not isinstance(values, list):
             raise PermanentImmichError("Immich random search returned an incompatible response")
 
         candidates: dict[UUID, Asset] = {}
-        for item in data:
-            asset = self._parse_eligible_asset(item, require_timeline=album_id is None)
+        for item in values:
+            asset = self._parse_eligible_asset(
+                item, require_timeline=source.kind is SourceKind.TIMELINE
+            )
             if asset is not None and asset.id not in recent:
                 candidates[asset.id] = asset
-                self._locations[asset.id] = asset.location
+                self._metadata[asset.id] = (asset.location, asset.date)
         if not candidates:
             raise AssetUnavailable("Immich returned no eligible new images")
         selected = list(candidates.values())
@@ -138,13 +182,40 @@ class ImmichClient:
                 albums.append(Album(album_id, name, count))
         return tuple(sorted(albums, key=lambda album: album.name.casefold()))
 
+    async def list_people(self) -> tuple[Person, ...]:
+        people: dict[UUID, Person] = {}
+        page = 1
+        while True:
+            data = await self._json_request(
+                "GET", "/api/people", params={"page": page, "size": 100, "withHidden": "false"}
+            )
+            if not isinstance(data, dict) or not isinstance(data.get("people"), list):
+                raise PermanentImmichError("Immich people returned an incompatible response")
+            for value in data["people"]:
+                if not isinstance(value, dict) or value.get("isHidden") is True:
+                    continue
+                try:
+                    person_id = UUID(str(value["id"]))
+                except (KeyError, ValueError):
+                    continue
+                name = str(value.get("name", "")).strip() or "Unnamed person"
+                people[person_id] = Person(person_id, name)
+            if data.get("hasNextPage") is not True:
+                break
+            page += 1
+        return tuple(sorted(people.values(), key=lambda person: person.name.casefold()))
+
     async def fetch_location(self, asset_id: UUID) -> str | None:
-        if asset_id in self._locations:
-            return self._locations[asset_id]
+        return (await self.fetch_metadata(asset_id))[0]
+
+    async def fetch_metadata(self, asset_id: UUID) -> tuple[str | None, str | None]:
+        if asset_id in self._metadata:
+            return self._metadata[asset_id]
         data = await self._json_request("GET", f"/api/assets/{asset_id}")
         location = self._parse_location(data)
-        self._locations[asset_id] = location
-        return location
+        date = self._parse_date(data)
+        self._metadata[asset_id] = (location, date)
+        return location, date
 
     async def validate_access(self) -> None:
         data = await self._json_request(
@@ -239,7 +310,11 @@ class ImmichClient:
         ):
             return None
         try:
-            return Asset(UUID(str(value["id"])), ImmichClient._parse_location(value))
+            return Asset(
+                UUID(str(value["id"])),
+                ImmichClient._parse_location(value),
+                ImmichClient._parse_date(value),
+            )
         except (KeyError, ValueError):
             return None
 
@@ -254,3 +329,23 @@ class ImmichClient:
             if isinstance(item, str) and item.strip()
         ]
         return ", ".join(dict.fromkeys(parts)) or None
+
+    @staticmethod
+    def _parse_date(value: object) -> str | None:
+        if not isinstance(value, dict):
+            return None
+        exif = value.get("exifInfo")
+        candidates = [
+            value.get("localDateTime"),
+            exif.get("dateTimeOriginal") if isinstance(exif, dict) else None,
+            value.get("fileCreatedAt"),
+        ]
+        for candidate in candidates:
+            if not isinstance(candidate, str) or not candidate.strip():
+                continue
+            try:
+                parsed = datetime.fromisoformat(candidate.strip().replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            return f"{parsed:%B} {parsed.day}, {parsed:%Y}"
+        return None

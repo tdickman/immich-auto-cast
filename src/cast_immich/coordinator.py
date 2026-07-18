@@ -19,7 +19,7 @@ from .cast import (
 )
 from .config import RotationSettings
 from .history import DisplayRecord, HistoryState
-from .immich import Asset, PermanentImmichError
+from .immich import Asset, PermanentImmichError, PhotoSource, SourceKind
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +45,14 @@ class AssetSelector(Protocol):
         batch_size: int,
         count: int,
         album_id: UUID | None,
+    ) -> tuple[Asset, ...]: ...
+
+    async def select_assets_for(
+        self,
+        recent: set[UUID],
+        batch_size: int,
+        count: int,
+        source: PhotoSource,
     ) -> tuple[Asset, ...]: ...
 
 
@@ -73,6 +81,8 @@ class HistoryPersistence(Protocol):
 
     def set_rotation_enabled(self, enabled: bool) -> HistoryState: ...
 
+    def set_autocast_enabled(self, enabled: bool) -> HistoryState: ...
+
     def record_display(self, load_id: str, asset_id: str) -> DisplayRecord: ...
 
 
@@ -82,6 +92,8 @@ class Command(StrEnum):
     NEXT = "next"
     STOP = "stop"
     SEEK = "seek"
+    AUTOCAST_ENABLE = "autocast_enable"
+    AUTOCAST_DISABLE = "autocast_disable"
 
 
 class CommandResult(StrEnum):
@@ -104,6 +116,10 @@ class CoordinatorSnapshot:
     current_asset: UUID | None = None
     current_load_id: str | None = None
     selected_album: UUID | None = None
+    autocast_enabled: bool = True
+    source_kind: SourceKind = SourceKind.TIMELINE
+    selected_person: UUID | None = None
+    search_query: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,7 +133,7 @@ class CommandEvent:
 
 @dataclass(frozen=True, slots=True)
 class SourceEvent:
-    album_id: UUID | None
+    source: PhotoSource
     completion: asyncio.Future[bool]
 
 
@@ -169,6 +185,7 @@ class Coordinator:
         self._history = history
         self._history_loaded = history is None
         self._rotation_enabled = history is None
+        self._autocast_enabled = True
         self._error: str | None = None
         self._last_display: DisplayRecord | None = None
         self._generation = 0
@@ -176,7 +193,8 @@ class Coordinator:
         self._media: tuple[MediaStatus, float] | None = None
         self._recent: deque[UUID] = deque(maxlen=settings.recent_history)
         self._upcoming: deque[Asset] = deque(maxlen=10)
-        self._selected_album: UUID | None = None
+        self._source = PhotoSource()
+        self._startup_pending = True
         self._nonce = 0
         self._timer: asyncio.Task[None] | None = None
         self._preparation: asyncio.Task[None] | None = None
@@ -219,11 +237,18 @@ class Coordinator:
         )
         return await completion
 
-    async def select_source(self, album_id: UUID | None) -> bool:
+    async def select_source(self, source: PhotoSource | UUID | None) -> bool:
         if self._stopping:
             return False
         completion: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
-        await self.queue.put(SourceEvent(album_id, completion))
+        normalized = (
+            source
+            if isinstance(source, PhotoSource)
+            else PhotoSource(SourceKind.ALBUM, source)
+            if source is not None
+            else PhotoSource()
+        )
+        await self.queue.put(SourceEvent(normalized, completion))
         return await completion
 
     async def pause(self, request_id: str) -> CommandResult:
@@ -284,6 +309,7 @@ class Coordinator:
         try:
             state = await asyncio.to_thread(self._history.load)
             self._rotation_enabled = state.rotation_enabled
+            self._autocast_enabled = state.autocast_enabled
         except Exception:
             self._error = "history persistence failed"
 
@@ -314,6 +340,9 @@ class Coordinator:
         if event.command in {Command.PAUSE, Command.ENABLE}:
             await self._set_rotation(event, event.command is Command.ENABLE)
             return
+        if event.command in {Command.AUTOCAST_ENABLE, Command.AUTOCAST_DISABLE}:
+            await self._set_autocast(event, event.command is Command.AUTOCAST_ENABLE)
+            return
         ownership = self._controllable_ownership()
         if ownership is None:
             self._store_result(event, CommandResult.REFUSED_NOT_OWNED)
@@ -333,19 +362,21 @@ class Coordinator:
         if self._active_command is not None or self.state is State.LOAD_PENDING:
             event.completion.set_result(False)
             return
-        if self._selected_album == event.album_id:
+        if self._source == event.source:
             event.completion.set_result(True)
             return
         owned = self._ownership_current()
         self._invalidate_work(preserve_expected=owned is not None)
         self._upcoming.clear()
-        self._selected_album = event.album_id
+        self._source = event.source
         if owned is not None:
             self._expected = owned
             self.state = State.OWNED
             if self._rotation_enabled:
                 self._schedule("rotate", self._settings.interval)
-        elif self.state is State.IDLE_CANDIDATE and self._rotation_enabled:
+        elif (
+            self.state is State.IDLE_CANDIDATE and self._rotation_enabled and self._autocast_enabled
+        ):
             self._begin_preparation("idle")
         event.completion.set_result(True)
 
@@ -393,6 +424,33 @@ class Coordinator:
         if enabled and self.state is not State.UNAVAILABLE:
             self._receiver = self._media = None
             await self._request_refresh("enable")
+        self._store_result(event, CommandResult.APPLIED)
+
+    async def _set_autocast(self, event: CommandEvent, enabled: bool) -> None:
+        if self._autocast_enabled is enabled:
+            self._store_result(event, CommandResult.ALREADY_APPLIED)
+            return
+        if self._history is not None:
+            try:
+                await asyncio.to_thread(self._history.set_autocast_enabled, enabled)
+            except Exception:
+                self._error = "history persistence failed"
+                self._store_result(event, CommandResult.FAILED)
+                return
+        self._autocast_enabled = enabled
+        self._error = None
+        self._invalidate_work(preserve_expected=self._ownership_current() is not None)
+        owned = self._ownership_current()
+        if owned is not None:
+            self._expected = owned
+            self.state = State.OWNED
+            if self._rotation_enabled:
+                self._schedule("rotate", self._settings.interval)
+        elif enabled and self.state is not State.UNAVAILABLE:
+            self._receiver = self._media = None
+            await self._request_refresh("autocast_enable")
+        else:
+            self.state = State.IDLE_CANDIDATE
         self._store_result(event, CommandResult.APPLIED)
 
     def _store_result(self, event: CommandEvent, result: CommandResult) -> None:
@@ -472,6 +530,8 @@ class Coordinator:
             return
 
         receiver, media = self._receiver[0], self._media[0]
+        startup_idle = self._startup_pending and self._is_idle()
+        self._startup_pending = False
         owned = self._ownership_current()
         if self.state is State.LOAD_PENDING:
             if owned is not None:
@@ -502,14 +562,15 @@ class Coordinator:
                 self._schedule("rotate", self._settings.interval)
             return
         if self._is_idle():
-            if not self._rotation_enabled:
+            if not self._rotation_enabled or not self._autocast_enabled:
                 self._invalidate_work()
                 self.state = State.IDLE_CANDIDATE
                 return
             if self.state is not State.IDLE_CANDIDATE:
                 self._invalidate_work()
                 self.state = State.IDLE_CANDIDATE
-                self._schedule("idle", self._settings.idle_debounce)
+                delay = 0 if startup_idle else self._settings.autocast_delay
+                self._schedule("idle", delay)
             return
         self._invalidate_work()
         self.state = State.PROTECTED
@@ -541,7 +602,7 @@ class Coordinator:
             return
         if purpose == "cooldown":
             await self._classify()
-        elif purpose == "enable":
+        elif purpose in {"enable", "autocast_enable"}:
             await self._classify()
         elif purpose == "idle" and self._is_idle():
             self.state = State.IDLE_CANDIDATE
@@ -596,18 +657,30 @@ class Coordinator:
             needed = 11 - len(candidates)
             try:
                 recent = set(self._recent) | {asset.id for asset in candidates}
-                source_selector = getattr(self._selector, "select_assets_from", None)
-                if source_selector is None:
-                    selected = await self._selector.select_assets(
-                        recent, self._settings.candidate_batch, needed
-                    )
-                else:
+                source_selector = getattr(self._selector, "select_assets_for", None)
+                if source_selector is not None:
                     selected = await source_selector(
                         recent,
                         self._settings.candidate_batch,
                         needed,
-                        self._selected_album,
+                        self._source,
                     )
+                else:
+                    album_selector = getattr(self._selector, "select_assets_from", None)
+                    if album_selector is not None and self._source.kind in {
+                        SourceKind.TIMELINE,
+                        SourceKind.ALBUM,
+                    }:
+                        selected = await album_selector(
+                            recent,
+                            self._settings.candidate_batch,
+                            needed,
+                            self._source.id,
+                        )
+                    else:
+                        selected = await self._selector.select_assets(
+                            recent, self._settings.candidate_batch, needed
+                        )
                 candidates.extend(selected)
             except Exception:
                 if not candidates:
@@ -821,5 +894,9 @@ class Coordinator:
             upcoming_assets=tuple(asset.id for asset in self._upcoming),
             current_asset=current[2] if current is not None else None,
             current_load_id=current[0] if current is not None else None,
-            selected_album=self._selected_album,
+            selected_album=self._source.id if self._source.kind is SourceKind.ALBUM else None,
+            autocast_enabled=self._autocast_enabled,
+            source_kind=self._source.kind,
+            selected_person=self._source.id if self._source.kind is SourceKind.PERSON else None,
+            search_query=self._source.query if self._source.kind is SourceKind.SEARCH else None,
         )

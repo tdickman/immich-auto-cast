@@ -41,6 +41,8 @@ class PreviewSource(Protocol):
 
     async def fetch_location(self, asset_id: UUID) -> str | None: ...
 
+    async def fetch_metadata(self, asset_id: UUID) -> tuple[str | None, str | None]: ...
+
 
 @dataclass(frozen=True, slots=True)
 class Capability:
@@ -133,13 +135,21 @@ class ImageRelay:
             if preview.content_type not in ALLOWED_IMAGE_TYPES:
                 raise AssetUnavailable("asset preview is not a supported image type")
             location: str | None = None
-            fetch_location = getattr(self._source, "fetch_location", None)
-            if fetch_location is not None:
+            date: str | None = None
+            fetch_metadata = getattr(self._source, "fetch_metadata", None)
+            if fetch_metadata is not None:
                 try:
-                    location = await fetch_location(asset_id)
+                    location, date = await fetch_metadata(asset_id)
                 except Exception:
-                    logger.warning("asset_location_fetch_failed")
-            return await asyncio.to_thread(_normalize_preview, preview, location)
+                    logger.warning("asset_metadata_fetch_failed")
+            else:
+                fetch_location = getattr(self._source, "fetch_location", None)
+                if fetch_location is not None:
+                    try:
+                        location = await fetch_location(asset_id)
+                    except Exception:
+                        logger.warning("asset_location_fetch_failed")
+            return await asyncio.to_thread(_normalize_preview, preview, location, date)
 
     async def start(self) -> None:
         if self._runner is not None:
@@ -189,7 +199,9 @@ class ImageRelay:
             self._tokens.pop(token, None)
 
 
-def _normalize_preview(preview: Preview, location: str | None = None) -> Preview:
+def _normalize_preview(
+    preview: Preview, location: str | None = None, date: str | None = None
+) -> Preview:
     try:
         with Image.open(io.BytesIO(preview.body)) as source:
             if source.width * source.height > MAX_IMAGE_PIXELS:
@@ -198,8 +210,8 @@ def _normalize_preview(preview: Preview, location: str | None = None) -> Preview
             image.thumbnail(MAX_CAST_SIZE, Image.Resampling.LANCZOS)
             if image.mode != "RGB":
                 image = image.convert("RGB")
-            if location:
-                _draw_location(image, location)
+            if location or date:
+                _draw_metadata(image, location, date)
             output = io.BytesIO()
             image.save(output, format="JPEG", quality=90, optimize=True)
     except (OSError, UnidentifiedImageError):
@@ -207,18 +219,22 @@ def _normalize_preview(preview: Preview, location: str | None = None) -> Preview
     return Preview(output.getvalue(), "image/jpeg")
 
 
-def _draw_location(image: Image.Image, location: str) -> None:
-    label = location.strip()[:120]
-    if not label:
+def _draw_metadata(image: Image.Image, location: str | None, date: str | None) -> None:
+    labels = [value.strip()[:120] for value in (location, date) if value and value.strip()]
+    if not labels:
         return
     draw = ImageDraw.Draw(image, "RGBA")
     font = ImageFont.load_default(size=max(12, min(image.size) // 28))
     padding = max(6, min(image.size) // 80)
     margin = max(8, min(image.size) // 45)
     available_width = max(1, image.width - (margin + padding) * 2)
-    while len(label) > 4 and draw.textlength(label, font=font) > available_width:
-        label = f"{label[:-4].rstrip()}..."
-    box = draw.textbbox((0, 0), label, font=font)
+    for index, label in enumerate(labels):
+        while len(label) > 4 and draw.textlength(label, font=font) > available_width:
+            label = f"{label[:-4].rstrip()}..."
+        labels[index] = label
+    label = "\n".join(labels)
+    spacing = max(2, padding // 2)
+    box = draw.multiline_textbbox((0, 0), label, font=font, spacing=spacing, align="right")
     width, height = box[2] - box[0], box[3] - box[1]
     right, bottom = image.width - margin, image.height - margin
     background = (
@@ -228,10 +244,15 @@ def _draw_location(image: Image.Image, location: str) -> None:
         bottom,
     )
     draw.rounded_rectangle(background, radius=padding, fill=(0, 0, 0, 155))
-    draw.text(
-        (right - padding, bottom - padding),
+    draw.multiline_text(
+        (right - padding - width, bottom - padding - height - box[1]),
         label,
         font=font,
         fill=(255, 255, 255, 235),
-        anchor="rb",
+        spacing=spacing,
+        align="right",
     )
+
+
+def _draw_location(image: Image.Image, location: str) -> None:
+    _draw_metadata(image, location, None)

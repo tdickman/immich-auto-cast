@@ -12,6 +12,8 @@ from cast_immich.immich import (
     AssetUnavailable,
     ImmichClient,
     PermanentImmichError,
+    PhotoSource,
+    SourceKind,
 )
 
 ASSET_ID = UUID("12345678-1234-4234-8234-123456789abc")
@@ -157,6 +159,7 @@ async def test_albums_filter_random_search_and_preserve_location(serve_app: Any)
                 eligible(
                     visibility="archive",
                     exifInfo={"city": "Portland", "state": "Oregon"},
+                    localDateTime="2026-07-04T14:30:00",
                 )
             ]
         )
@@ -173,6 +176,7 @@ async def test_albums_filter_random_search_and_preserve_location(serve_app: Any)
 
     assert [(album.name, album.asset_count) for album in listed] == [("Trips", 12)]
     assert selected[0].location == "Portland, Oregon"
+    assert selected[0].date == "July 4, 2026"
     assert cached_location == "Portland, Oregon"
     assert observed["body"] == {
         "type": "IMAGE",
@@ -182,6 +186,77 @@ async def test_albums_filter_random_search_and_preserve_location(serve_app: Any)
         "size": 20,
         "albumIds": [str(album_id)],
     }
+
+
+@pytest.mark.asyncio
+async def test_people_are_paginated_and_person_filters_random_search(serve_app: Any) -> None:
+    first_id, second_id = UUID(int=21), UUID(int=22)
+    observed: dict[str, Any] = {}
+
+    async def people(request: web.Request) -> web.Response:
+        page = int(request.query["page"])
+        assert request.query["withHidden"] == "false"
+        if page == 1:
+            return web.json_response(
+                {
+                    "people": [{"id": str(first_id), "name": "Ada", "isHidden": False}],
+                    "hasNextPage": True,
+                }
+            )
+        return web.json_response(
+            {
+                "people": [
+                    {"id": str(second_id), "name": "", "isHidden": False},
+                    {"id": str(UUID(int=23)), "name": "Hidden", "isHidden": True},
+                ],
+                "hasNextPage": False,
+            }
+        )
+
+    async def search(request: web.Request) -> web.Response:
+        observed["body"] = await request.json()
+        return web.json_response([eligible(visibility="archive")])
+
+    app = web.Application()
+    app.router.add_get("/api/people", people)
+    app.router.add_post("/api/search/random", search)
+    server = await serve_app(app)
+    settings = ImmichSettings(str(server.make_url("/")).rstrip("/"), "secret", 2, 1)
+    async with ImmichClient(settings) as client:
+        listed = await client.list_people()
+        selected = await client.select_assets_for(
+            set(), 20, 1, PhotoSource(SourceKind.PERSON, first_id)
+        )
+
+    assert [(person.id, person.name) for person in listed] == [
+        (first_id, "Ada"),
+        (second_id, "Unnamed person"),
+    ]
+    assert selected[0].id == ASSET_ID
+    assert observed["body"]["personIds"] == [str(first_id)]
+
+
+@pytest.mark.asyncio
+async def test_ai_search_uses_smart_search_contract(serve_app: Any) -> None:
+    observed: dict[str, Any] = {}
+
+    async def search(request: web.Request) -> web.Response:
+        observed["body"] = await request.json()
+        return web.json_response({"assets": {"items": [eligible(visibility="archive")]}})
+
+    app = web.Application()
+    app.router.add_post("/api/search/smart", search)
+    server = await serve_app(app)
+    settings = ImmichSettings(str(server.make_url("/")).rstrip("/"), "secret", 2, 1)
+    async with ImmichClient(settings) as client:
+        selected = await client.select_assets_for(
+            set(), 40, 1, PhotoSource(SourceKind.SEARCH, query="snowy mountains")
+        )
+
+    assert selected[0].id == ASSET_ID
+    assert observed["body"]["query"] == "snowy mountains"
+    assert observed["body"]["page"] == 1
+    assert observed["body"]["size"] == 40
 
 
 @pytest.mark.asyncio
