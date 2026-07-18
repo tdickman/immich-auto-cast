@@ -78,32 +78,38 @@
         </div>
       </section>
 
-      <section class="gallery-grid">
-        <div class="gallery-panel current-panel" aria-labelledby="current-title">
-          <div class="section-heading">
-            <h2 id="current-title">Now showing</h2>
-            <span class="history-count" id="current-count">0</span>
-          </div>
-          <div class="contact-sheet" id="current-list" aria-live="polite">
+      <section class="playback-gallery" aria-label="Photo playback">
+        <div class="now-panel" aria-labelledby="current-title">
+          <p class="eyebrow">On screen</p>
+          <h2 id="current-title">Now showing</h2>
+          <div class="now-content" id="current-list" aria-live="polite">
             <p class="empty-state">No photo is currently casting.</p>
           </div>
         </div>
-        <div class="gallery-panel" aria-labelledby="history-title">
+        <div class="gallery-panel upcoming-panel" aria-labelledby="upcoming-title">
           <div class="section-heading">
-            <h2 id="history-title">Previous</h2>
-            <span class="history-count" id="history-count">0</span>
-          </div>
-          <div class="contact-sheet" id="history-list" aria-live="polite">
-            <p class="empty-state">No photos shown yet.</p>
-          </div>
-        </div>
-        <div class="gallery-panel" aria-labelledby="upcoming-title">
-          <div class="section-heading">
-            <h2 id="upcoming-title">Up next</h2>
+            <div>
+              <p class="eyebrow">Coming up</p>
+              <h2 id="upcoming-title">Up next</h2>
+            </div>
             <span class="history-count" id="upcoming-count">0</span>
           </div>
+          <p class="section-note">Open a photo in Immich, or use its corner control to play from there.</p>
           <div class="contact-sheet" id="upcoming-list" aria-live="polite">
             <p class="empty-state">Photos appear here when casting starts.</p>
+          </div>
+        </div>
+        <div class="gallery-panel history-panel" aria-labelledby="history-title">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Recently on screen</p>
+              <h2 id="history-title">Previously shown</h2>
+            </div>
+            <span class="history-count" id="history-count">0</span>
+          </div>
+          <p class="section-note">Open a photo in Immich, or use its corner control to play from there.</p>
+          <div class="contact-sheet" id="history-list" aria-live="polite">
+            <p class="empty-state">No photos shown yet.</p>
           </div>
         </div>
       </section>

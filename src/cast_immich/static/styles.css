@@ -69,22 +69,43 @@ h2 { margin: 0; font-size: 2rem; letter-spacing: -.025em; }
 .control-button.danger { color: #d9aaa0; }
 .button-mark { width: 1.25rem; font: 1.05rem var(--mono); }
 
-.gallery-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1.25rem; margin-top: 1.25rem; }
-.current-panel { grid-column: 1 / -1; }
-.current-panel .photo-record { flex-basis: clamp(190px, 24vw, 300px); }
+.playback-gallery { display: grid; gap: 1.25rem; margin-top: 1.25rem; }
+.now-panel { padding: clamp(1.5rem, 4vw, 3rem); overflow: hidden; border-radius: 18px; color: #f7f6f2; background: #242d29; }
+.now-panel > .eyebrow { margin-bottom: .55rem; color: #ff9b80; }
+.now-panel h2 { font-size: clamp(2.3rem, 5vw, 4.5rem); }
+.now-content { margin-top: 1.5rem; }
+.current-record { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(220px, .75fr); gap: clamp(1.25rem, 4vw, 3rem); align-items: end; }
+.current-media { display: block; min-width: 0; }
+.current-media img { display: block; width: 100%; max-height: 560px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 13px; background: #303a35; }
+.current-details { display: grid; gap: .7rem; align-content: end; padding-bottom: .25rem; color: #b8bfba; }
+.current-details strong { color: #f7f6f2; font: 400 clamp(1.5rem, 3vw, 2.35rem) var(--display); }
+.current-details time, .current-details code { font: .7rem/1.5 var(--mono); }
+.current-details code { overflow: hidden; color: #89928d; text-overflow: ellipsis; }
+.view-photo { width: fit-content; margin-top: .55rem; padding: .75rem 1rem; border: 1px solid #59645e; border-radius: 9px; color: #f7f6f2; text-decoration: none; font-size: .78rem; font-weight: 700; }
+.view-photo:hover { border-color: #ff9b80; color: #ff9b80; }
 .gallery-panel { min-width: 0; padding: 1.5rem; border: 1px solid var(--line); border-radius: 18px; background: var(--surface); }
+.upcoming-panel { border-top: 3px solid var(--accent); }
+.history-panel { background: #fafaf7; }
 .section-heading { display: flex; align-items: center; justify-content: space-between; }
+.section-heading .eyebrow { margin-bottom: .45rem; }
+.section-note { margin: .6rem 0 0; color: var(--muted); font-size: .78rem; }
 .history-count { min-width: 2rem; padding: .3rem .55rem; border-radius: 999px; color: var(--muted); background: var(--bg); text-align: center; font: .68rem var(--mono); }
 .contact-sheet { display: flex; gap: .75rem; overflow-x: auto; padding: 1.25rem 0 .25rem; scrollbar-width: thin; scrollbar-color: #a7aca8 transparent; scroll-snap-type: x proximity; }
-.photo-record { flex: 0 0 clamp(130px, 15vw, 190px); margin: 0; scroll-snap-align: start; }
-.photo-jump { padding: 0; border: 0; color: inherit; background: transparent; text-align: left; }
-.photo-jump img { transition: transform .18s, box-shadow .18s; }
-.photo-jump:not(:disabled):hover img { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(25, 32, 29, .16); }
+.photo-record { flex: 0 0 clamp(180px, 20vw, 240px); margin: 0; scroll-snap-align: start; }
+.photo-visual { position: relative; }
+.photo-media { display: block; border-radius: 10px; }
+.photo-media img { transition: transform .18s, box-shadow .18s, filter .18s; }
+.photo-media:hover img { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(25, 32, 29, .16); }
 .photo-record img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 10px; background: #e3e3de; }
-.photo-record figcaption, .photo-caption { padding: .55rem .15rem 0; color: var(--muted); font: .65rem/1.4 var(--mono); }
-.photo-record code { display: none; }
+.photo-caption { padding: .65rem .05rem 0; color: var(--muted); font: .65rem/1.4 var(--mono); }
+.photo-caption time, .photo-caption strong { min-height: 1rem; }
 .upcoming-record strong { color: var(--accent-dark); letter-spacing: .08em; }
+.photo-action { position: absolute; top: .55rem; right: .55rem; width: 42px; height: 42px; padding: 0 0 0 .15rem; display: grid; place-items: center; border: 1px solid rgba(255, 255, 255, .72); border-radius: 50%; color: white; background: rgba(25, 32, 29, .84); box-shadow: 0 4px 14px rgba(25, 32, 29, .28); font: .85rem/1 var(--sans); backdrop-filter: blur(8px); transition: background .18s, transform .18s; }
+.photo-action:not(:disabled):hover { background: var(--accent); transform: scale(1.06); }
+.photo-record.pending img { filter: saturate(.45); }
+.photo-record.pending .photo-action { opacity: 1; }
 .empty-state { min-height: 90px; margin: 0; display: flex; align-items: center; color: var(--muted); font-size: .9rem; }
+.now-panel .empty-state { color: #b8bfba; }
 
 .settings-section { margin-top: 1.25rem; overflow: hidden; border: 1px solid var(--line); border-radius: 18px; background: var(--surface); }
 .settings-section > summary { min-height: 86px; padding: 1.25rem 1.5rem; display: flex; align-items: center; justify-content: space-between; cursor: pointer; list-style: none; }
@@ -136,9 +157,14 @@ input:focus, select:focus { border-color: var(--accent); outline: 0; box-shadow:
   .control-stage { grid-template-columns: 1fr; min-height: 0; border-radius: 18px; }
   .stage-copy { padding: 2.5rem 1.5rem; }
   .control-console { padding: 1.5rem; }
-  .gallery-grid, .settings-grid, .advanced-grid { grid-template-columns: 1fr; }
+  .settings-grid, .advanced-grid { grid-template-columns: 1fr; }
   .output-fields, .advanced-output-fields { grid-template-columns: 1fr 1fr; }
-  .gallery-grid { gap: .75rem; margin-top: .75rem; }
+  .playback-gallery { gap: .75rem; margin-top: .75rem; }
+  .current-record { grid-template-columns: 1fr; align-items: start; }
+  .current-media img { aspect-ratio: 4 / 3; }
+  .current-details { grid-template-columns: 1fr auto; align-items: center; }
+  .current-details strong, .current-details code { grid-column: 1 / -1; }
+  .current-details .view-photo { grid-column: 2; grid-row: 2; margin: 0; }
   .settings-section { margin-top: .75rem; }
 }
 
@@ -154,7 +180,11 @@ input:focus, select:focus { border-color: var(--accent); outline: 0; box-shadow:
   .transport { grid-template-columns: 1fr 1fr; gap: .5rem; margin-top: 2rem; }
   .control-button { min-height: 58px; padding: .7rem; font-size: .83rem; }
   .gallery-panel { padding: 1.1rem; }
-  .photo-record { flex-basis: 55vw; }
+  .now-panel { padding: 1.25rem; }
+  .now-content { margin-top: 1rem; }
+  .photo-record { flex-basis: 62vw; }
+  .current-details { grid-template-columns: 1fr; }
+  .current-details .view-photo { grid-column: 1; grid-row: auto; }
   .settings-section > summary { padding: 1rem 1.1rem; }
   .settings-form { padding: 0 1.1rem 1.1rem; }
   .advanced-settings { margin: 0 -1.1rem; }

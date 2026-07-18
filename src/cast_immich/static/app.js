@@ -4,7 +4,7 @@ const state = {
   csrf: "", revision: 0, config: null, dirty: false, timer: null,
   mode: "setup", error: "", outputs: new Map(), histories: new Map(), historySignatures: new Map(),
   selectedOutputId: localStorage.getItem("cast-immich-output"), pendingCommands: new Map(), commandInFlight: new Set(),
-  sourceDrafts: new Map(), thumbnailCache: new Map(),
+  sourceDrafts: new Map(), thumbnailCache: new Map(), pendingSeeks: new Map(),
   thumbnailKeys: new Map(), devices: [],
 };
 const form = document.querySelector("#settings-form");
@@ -262,21 +262,85 @@ function renderGallery(selector, records, emptyMessage, renderRecord) {
   } else list.replaceChildren(...records.map(renderRecord));
 }
 
-function photoButton(outputId, kind, id, index, extraClass = "") {
+function immichPhotoUrl(assetId) {
+  const base = state.config?.immich?.url;
+  if (!base) return "#";
+  try {
+    return new URL(`photos/${encodeURIComponent(assetId)}`, `${base.replace(/\/+$/, "")}/`).href;
+  } catch (_error) {
+    return "#";
+  }
+}
+
+function photoLink(outputId, record, label, className = "photo-media") {
+  const link = document.createElement("a");
+  link.className = className;
+  link.href = immichPhotoUrl(record.asset_id);
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.setAttribute("aria-label", `${label} in Immich`);
+  const image = document.createElement("img");
+  usePreloadedThumbnail(image, outputId, record);
+  image.alt = label;
+  link.append(image);
+  return link;
+}
+
+function relativeTime(value) {
+  const date = new Date(value);
+  const seconds = Math.round((date.getTime() - Date.now()) / 1000);
+  if (!Number.isFinite(seconds)) return "Recently";
+  if (Math.abs(seconds) < 60) return "Just now";
+  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  const units = [
+    ["year", 31536000], ["month", 2592000], ["day", 86400],
+    ["hour", 3600], ["minute", 60],
+  ];
+  const [unit, size] = units.find(([_unit, unitSize]) => Math.abs(seconds) >= unitSize) || units.at(-1);
+  return formatter.format(Math.round(seconds / size), unit);
+}
+
+function photoCard(outputId, kind, record, index, canSeek) {
+  const id = kind === "history" ? record.event_id : record.asset_id;
+  const pending = state.pendingSeeks.get(outputId);
+  const seekKey = `${kind}:${id}`;
+  const isPending = pending === seekKey;
+  const card = document.createElement("article");
+  card.className = `photo-record ${kind === "upcoming" ? "upcoming-record" : "history-record"}${isPending ? " pending" : ""}`;
+  card.style.animationDelay = `${index * 45}ms`;
+  const visual = document.createElement("div");
+  visual.className = "photo-visual";
+  visual.append(photoLink(outputId, record, kind === "upcoming" ? `Upcoming photo ${index + 1}` : "Previously shown photo"));
+
   const button = document.createElement("button");
   button.type = "button";
-  button.className = `photo-record photo-jump ${extraClass}`.trim();
-  button.style.animationDelay = `${index * 45}ms`;
-  button.setAttribute("aria-label", `Show this ${kind} photo now`);
+  button.className = "photo-action photo-jump";
+  button.textContent = isPending ? "…" : "▶";
+  button.setAttribute("aria-label", isPending ? "Playing from this photo" : "Play from here");
+  button.title = isPending ? "Playing from this photo" : "Play from here";
+  button.disabled = !canSeek || pending !== undefined;
+  if (!canSeek) button.title = "Playback controls are unavailable for this receiver";
   button.addEventListener("click", () => performSeek(outputId, kind, id));
-  return button;
+  visual.append(button);
+
+  const caption = document.createElement("div");
+  caption.className = "photo-caption";
+  const metadata = document.createElement(kind === "history" ? "time" : "strong");
+  if (kind === "history") {
+    metadata.dateTime = record.confirmed_at;
+    metadata.title = new Date(record.confirmed_at).toLocaleString();
+    metadata.textContent = relativeTime(record.confirmed_at);
+  } else metadata.textContent = `NEXT ${String(index + 1).padStart(2, "0")}`;
+  caption.append(metadata);
+  card.append(visual);
+  card.append(caption);
+  return card;
 }
 
 function renderHistory(outputId) {
   if (state.selectedOutputId !== outputId) return;
   const payload = state.histories.get(outputId);
   if (!payload) {
-    document.querySelector("#current-count").textContent = "0";
     document.querySelector("#history-count").textContent = "0";
     document.querySelector("#upcoming-count").textContent = "0";
     renderGallery("#current-list", [], "Loading this output…", () => {});
@@ -286,54 +350,54 @@ function renderHistory(outputId) {
   }
   const records = payload.records || [];
   const upcoming = payload.upcoming || [];
-  document.querySelector("#current-count").textContent = payload.current ? "1" : "0";
   document.querySelector("#history-count").textContent = String(records.length);
   document.querySelector("#upcoming-count").textContent = String(upcoming.length);
+  const output = state.outputs.get(outputId);
+  const canSeek = actionAvailable(output, "next");
+  const seekPending = state.pendingSeeks.has(outputId);
+  document.querySelector("#history-list").setAttribute("aria-busy", String(seekPending));
+  document.querySelector("#upcoming-list").setAttribute("aria-busy", String(seekPending));
   const signature = JSON.stringify([
     [payload.current?.asset_id, payload.current?.thumbnail_url],
     records.map(record => [record.event_id, record.confirmed_at, record.thumbnail_url]),
     upcoming.map(record => [record.asset_id, record.thumbnail_url]),
+    canSeek,
+    state.pendingSeeks.get(outputId),
+    Math.floor(Date.now() / 60000),
   ]);
   if (state.historySignatures.get(outputId) === signature) return;
   state.historySignatures.set(outputId, signature);
   renderGallery("#current-list", payload.current ? [payload.current] : [], "No photo is currently casting.", record => {
-    const figure = document.createElement("figure");
-    figure.className = "photo-record current-record";
-    const image = document.createElement("img");
-    usePreloadedThumbnail(image, outputId, record);
-    image.alt = "Currently displayed Immich photo";
-    const caption = document.createElement("div");
-    caption.className = "photo-caption";
-    caption.textContent = record.confirmed_at ? new Date(record.confirmed_at).toLocaleString() : "NOW CASTING";
-    figure.append(image, caption);
-    return figure;
+    const article = document.createElement("article");
+    article.className = "current-record";
+    article.append(photoLink(outputId, record, "Currently displayed photo", "current-media"));
+    const details = document.createElement("div");
+    details.className = "current-details";
+    const status = document.createElement("strong");
+    status.textContent = "Casting now";
+    const time = document.createElement("time");
+    if (record.confirmed_at) {
+      time.dateTime = record.confirmed_at;
+      time.title = new Date(record.confirmed_at).toLocaleString();
+      time.textContent = relativeTime(record.confirmed_at);
+    } else time.textContent = "Waiting for display confirmation";
+    const asset = document.createElement("code");
+    asset.textContent = record.asset_id;
+    const view = document.createElement("a");
+    view.className = "view-photo";
+    view.href = immichPhotoUrl(record.asset_id);
+    view.target = "_blank";
+    view.rel = "noopener noreferrer";
+    view.textContent = "View in Immich ↗";
+    details.append(status, time, asset, view);
+    article.append(details);
+    return article;
   });
   renderGallery("#history-list", records, "No confirmed photos yet.", (record, index) => {
-    const figure = photoButton(outputId, "history", record.event_id, index);
-    const image = document.createElement("img");
-    usePreloadedThumbnail(image, outputId, record);
-    image.alt = "Recently displayed Immich photo";
-    const caption = document.createElement("div");
-    caption.className = "photo-caption";
-    const time = document.createElement("time");
-    time.dateTime = record.confirmed_at;
-    time.textContent = new Date(record.confirmed_at).toLocaleString();
-    caption.append(time);
-    figure.append(image, caption);
-    return figure;
+    return photoCard(outputId, "history", record, index, canSeek);
   });
   renderGallery("#upcoming-list", upcoming, "The next photos will appear when rotation begins.", (record, index) => {
-    const figure = photoButton(outputId, "upcoming", record.asset_id, index, "upcoming-record");
-    const image = document.createElement("img");
-    usePreloadedThumbnail(image, outputId, record);
-    image.alt = `Upcoming Immich photo ${index + 1}`;
-    const caption = document.createElement("div");
-    caption.className = "photo-caption";
-    const position = document.createElement("strong");
-    position.textContent = `NEXT ${String(index + 1).padStart(2, "0")}`;
-    caption.append(position);
-    figure.append(image, caption);
-    return figure;
+    return photoCard(outputId, "upcoming", record, index, canSeek);
   });
 }
 
@@ -386,7 +450,10 @@ async function performControl(outputId, command) {
 }
 
 async function performSeek(outputId, targetKind, targetId) {
-  document.querySelectorAll(".photo-jump").forEach(button => { button.disabled = true; });
+  if (state.pendingSeeks.has(outputId)) return;
+  state.pendingSeeks.set(outputId, `${targetKind}:${targetId}`);
+  state.historySignatures.delete(outputId);
+  renderHistory(outputId);
   try {
     const result = await mutate(outputPath(outputId, "/seek"), { request_id: createRequestId(), target_kind: targetKind, target_id: targetId });
     notify(titleCase(result.outcome));
@@ -394,6 +461,10 @@ async function performSeek(outputId, targetKind, targetId) {
   } catch (error) {
     notify(titleCase(error.message), true);
     await refreshOutput(outputId);
+  } finally {
+    state.pendingSeeks.delete(outputId);
+    state.historySignatures.delete(outputId);
+    renderHistory(outputId);
   }
 }
 

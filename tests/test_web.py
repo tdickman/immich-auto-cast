@@ -215,6 +215,23 @@ async def test_dashboard_assets_expose_complete_operator_interface(
     assert "Now showing /" not in javascript
     assert "Previous /" not in javascript
     assert "Up next /" not in javascript
+    assert 'class="now-panel"' in html
+    assert "Previously shown" in html
+    assert html.count("use its corner control to play from there") == 2
+    assert 'id="current-count"' not in html
+    assert "function immichPhotoUrl(assetId)" in javascript
+    assert 'link.target = "_blank"' in javascript
+    assert 'button.textContent = isPending ? "…" : "▶"' in javascript
+    accessible_play_label = (
+        'button.setAttribute("aria-label", isPending ? "Playing from this photo" '
+        ': "Play from here")'
+    )
+    assert accessible_play_label in javascript
+    assert 'actionAvailable(output, "next")' in javascript
+    assert 'setAttribute("aria-busy", String(seekPending))' in javascript
+    assert ".current-record" in css
+    assert ".upcoming-panel" in css
+    assert ".photo-visual { position: relative; }" in css
     assert 'id="stop-button"' in html
     assert 'id="reconnect-button"' not in html
     assert "Stop cast" in html
