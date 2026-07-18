@@ -9,7 +9,14 @@ from enum import StrEnum
 from typing import Protocol
 from uuid import UUID, uuid4
 
-from .cast import DEFAULT_MEDIA_RECEIVER, CastEvent, EventKind, MediaStatus, ReceiverStatus
+from .cast import (
+    BACKDROP_RECEIVER,
+    DEFAULT_MEDIA_RECEIVER,
+    CastEvent,
+    EventKind,
+    MediaStatus,
+    ReceiverStatus,
+)
 from .config import RotationSettings
 from .history import DisplayRecord, HistoryState
 from .immich import Asset, PermanentImmichError
@@ -317,7 +324,11 @@ class Coordinator:
             if self._receiver is not None and event.observed_at < self._receiver[1]:
                 return
             self._receiver = (event.receiver, event.observed_at)
-            if event.receiver.app_id not in {None, DEFAULT_MEDIA_RECEIVER}:
+            if event.receiver.app_id not in {
+                None,
+                BACKDROP_RECEIVER,
+                DEFAULT_MEDIA_RECEIVER,
+            }:
                 self._invalidate_work()
                 self.state = State.PROTECTED
                 return
@@ -346,7 +357,7 @@ class Coordinator:
         receiver, media = self._receiver[0], self._media[0]
         owned = self._ownership_current()
         if self.state is State.LOAD_PENDING:
-            if owned is not None and media.player_state != "PAUSED":
+            if owned is not None:
                 if owned != self._expected:
                     return
                 self._cancel_timer()
@@ -367,7 +378,7 @@ class Coordinator:
             self._invalidate_work()
             self.state = State.PROTECTED
             return
-        if owned is not None and media.player_state != "PAUSED":
+        if owned is not None:
             self._expected = owned
             self.state = State.OWNED
             if self._rotation_enabled and self._timer is None:
@@ -563,17 +574,12 @@ class Coordinator:
     def _controllable_ownership(self) -> tuple[str, str, UUID] | None:
         if self.state is not State.OWNED or self._media is None:
             return None
-        if self._media[0].player_state == "PAUSED":
-            return None
         return self._ownership_current()
 
     def _active_ownership_matches(self) -> bool:
         if self._active_command is None or self._media is None:
             return False
-        return (
-            self._media[0].player_state != "PAUSED"
-            and self._ownership_current() == self._active_command[1]
-        )
+        return self._ownership_current() == self._active_command[1]
 
     def _abandon_cancelled_command(self) -> bool:
         active = self._active_command
@@ -582,11 +588,7 @@ class Coordinator:
         self._active_command = None
         self._invalidate_work()
         owned = self._ownership_current()
-        if (
-            owned is not None
-            and self._media is not None
-            and self._media[0].player_state != "PAUSED"
-        ):
+        if owned is not None:
             self._expected = owned
             self.state = State.OWNED
             if self._rotation_enabled:
@@ -599,9 +601,11 @@ class Coordinator:
         if self._receiver is None or self._media is None:
             return False
         receiver, media = self._receiver[0], self._media[0]
+        idle_receiver = (receiver.app_id is None and receiver.session_id is None) or (
+            receiver.app_id == BACKDROP_RECEIVER and receiver.session_id is not None
+        )
         return (
-            receiver.app_id is None
-            and receiver.session_id is None
+            idle_receiver
             and media.player_state in {"IDLE", "UNKNOWN"}
             and media.media_session_id is None
             and media.content_id is None

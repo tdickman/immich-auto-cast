@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import io
+import logging
 import secrets
 import time
 from collections import OrderedDict
@@ -10,9 +12,12 @@ from typing import Protocol
 from uuid import UUID
 
 from aiohttp import web
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from .config import RelaySettings
 from .immich import AssetUnavailable, Preview
+
+logger = logging.getLogger(__name__)
 
 ALLOWED_IMAGE_TYPES = {
     "image/avif",
@@ -26,6 +31,8 @@ SAFE_HEADERS = {
     "Cache-Control": "private, max-age=60",
     "X-Content-Type-Options": "nosniff",
 }
+MAX_CAST_SIZE = (1280, 720)
+MAX_IMAGE_PIXELS = 40_000_000
 
 
 class PreviewSource(Protocol):
@@ -84,13 +91,14 @@ class ImageRelay:
                 preview = await self._source.fetch_preview(
                     asset_id, self._settings.max_response_bytes
                 )
+                if preview.content_type not in ALLOWED_IMAGE_TYPES:
+                    raise AssetUnavailable("asset preview is not a supported image type")
+                preview = await asyncio.to_thread(_normalize_preview, preview)
         finally:
             if task is not None:
                 self._active_mints.discard(task)
         if self._closed:
             raise AssetUnavailable("image relay is closed")
-        if preview.content_type not in ALLOWED_IMAGE_TYPES:
-            raise AssetUnavailable("asset preview is not a supported image type")
         token = secrets.token_urlsafe(24)
         self._tokens[token] = Capability(
             asset_id, self._clock() + self._settings.token_lifetime, preview
@@ -125,6 +133,7 @@ class ImageRelay:
         self._tokens.clear()
 
     async def _handle(self, request: web.Request) -> web.Response:
+        logger.info("image_requested")
         if request.method not in {"GET", "HEAD"}:
             return web.Response(status=405, headers={"Allow": "GET, HEAD", **SAFE_HEADERS})
         capability = self._tokens.get(request.match_info["token"])
@@ -142,3 +151,19 @@ class ImageRelay:
         expired = [token for token, item in self._tokens.items() if item.expires_at <= now]
         for token in expired:
             self._tokens.pop(token, None)
+
+
+def _normalize_preview(preview: Preview) -> Preview:
+    try:
+        with Image.open(io.BytesIO(preview.body)) as source:
+            if source.width * source.height > MAX_IMAGE_PIXELS:
+                raise AssetUnavailable("asset preview dimensions exceed the safety limit")
+            image = ImageOps.exif_transpose(source)
+            image.thumbnail(MAX_CAST_SIZE, Image.Resampling.LANCZOS)
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+            output = io.BytesIO()
+            image.save(output, format="JPEG", quality=90, optimize=True)
+    except (OSError, UnidentifiedImageError):
+        raise AssetUnavailable("asset preview is not a valid image") from None
+    return Preview(output.getvalue(), "image/jpeg")

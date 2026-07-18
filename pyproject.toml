@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
   "aiohttp>=3.12,<4",
+  "pillow>=11,<13",
   "pychromecast==14.0.10",
 ]
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import time
 from dataclasses import dataclass
 from enum import StrEnum
@@ -16,7 +17,10 @@ from pychromecast.socket_client import ConnectionStatusListener
 
 from .config import ChromecastSettings
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_MEDIA_RECEIVER = "CC1AD845"
+BACKDROP_RECEIVER = "E8C28D3C"
 
 
 class EventKind(StrEnum):
@@ -213,25 +217,52 @@ class CastAdapter:
         if generation != self._generation or self._cast is None or self._stopping:
             return False
         cast = self._cast
+        loop = asyncio.get_running_loop()
+        response: asyncio.Future[tuple[bool, dict[str, Any] | None]] = loop.create_future()
+
+        def loaded(sent: bool, data: dict[str, Any] | None) -> None:
+            def resolve() -> None:
+                if not response.done():
+                    response.set_result((sent, data))
+
+            loop.call_soon_threadsafe(resolve)
 
         def load() -> None:
             cast.media_controller.play_media(
                 url,
                 content_type,
-                stream_type="BUFFERED",
+                stream_type="LIVE",
                 title="Immich photo",
                 media_info={"customData": custom_data},
+                callback_function=loaded,
             )
 
         await asyncio.to_thread(load)
-        return generation == self._generation and not self._stopping
+        try:
+            sent, data = await asyncio.wait_for(response, self._settings.load_timeout)
+        except TimeoutError:
+            logger.warning("cast_load_response", extra={"reason": "timeout"})
+            return False
+        reason = data.get("type", "unknown") if isinstance(data, dict) else "no_response"
+        logger.info("cast_load_response", extra={"reason": reason})
+        return sent and generation == self._generation and not self._stopping
 
     async def refresh_status(self, generation: int) -> None:
         if generation != self._generation or self._cast is None or self._stopping:
             return
         cast = self._cast
-        await asyncio.to_thread(cast.request_status)
-        await asyncio.to_thread(cast.media_controller.update_status)
+        await asyncio.to_thread(cast.socket_client.receiver_controller.update_status)
+        if cast.media_controller.is_active:
+            await asyncio.to_thread(cast.media_controller.update_status)
+        else:
+            self._emit(
+                CastEvent(
+                    EventKind.MEDIA,
+                    generation,
+                    time.monotonic(),
+                    media=MediaStatus("UNKNOWN", None, None, {}),
+                )
+            )
 
     async def stop_media(self, generation: int) -> bool:
         """Stop media only on the coordinator's current connection generation."""
@@ -265,6 +296,7 @@ class CastAdapter:
                 cast.media_controller.register_status_listener(listeners)
                 await asyncio.to_thread(cast.wait, self._settings.discovery_timeout)
                 self._emit(CastEvent(EventKind.CONNECTED, self._generation, time.monotonic()))
+                await self.refresh_status(self._generation)
                 connected_at = time.monotonic()
                 while not self._stopping and cast.socket_client.is_connected:
                     try:

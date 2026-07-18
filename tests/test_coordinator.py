@@ -179,6 +179,26 @@ async def test_stable_idle_sends_exactly_one_load_and_confirms_ownership() -> No
 
 
 @pytest.mark.asyncio
+async def test_backdrop_without_media_is_idle_and_sends_one_load() -> None:
+    coordinator, queue, selector, cast = make_coordinator()
+    await coordinator.handle(event(EventKind.CONNECTED))
+    for step in range(3):
+        await coordinator.handle(
+            event(EventKind.RECEIVER, receiver=ReceiverStatus("E8C28D3C", "backdrop"))
+        )
+        await coordinator.handle(
+            event(EventKind.MEDIA, media=MediaStatus("UNKNOWN", None, None, {}))
+        )
+        if step < 2:
+            await drain_one(queue, coordinator)
+
+    assert selector.calls == 1
+    assert len(cast.loads) == 1
+    assert coordinator.state is State.LOAD_PENDING
+    await coordinator.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("player_state", ["PLAYING", "BUFFERING", "PAUSED"])
 async def test_external_active_media_is_protected(player_state: str) -> None:
     coordinator, _queue, selector, cast = make_coordinator()
@@ -253,6 +273,53 @@ async def test_restart_recognizes_only_complete_persistent_markers() -> None:
     assert coordinator.snapshot.state is State.OWNED
     assert cast.loads == []
     await coordinator.close()
+
+
+@pytest.mark.asyncio
+async def test_owned_still_image_reported_as_paused_remains_owned() -> None:
+    coordinator, _queue, _selector, cast = make_coordinator()
+    url = "http://192.168.1.5:8787/image/existing"
+    metadata = {
+        "schema": "cast-immich/v1",
+        "installationId": str(INSTALLATION_ID),
+        "loadId": "existing-load",
+        "contentUrl": url,
+        "assetId": str(ASSET_ID),
+    }
+    await coordinator.handle(event(EventKind.CONNECTED))
+    await coordinator.handle(
+        event(EventKind.RECEIVER, receiver=ReceiverStatus("CC1AD845", "session"))
+    )
+    await coordinator.handle(event(EventKind.MEDIA, media=MediaStatus("PAUSED", url, 1, metadata)))
+
+    assert coordinator.state is State.OWNED
+    assert cast.loads == []
+    await coordinator.close()
+
+
+@pytest.mark.asyncio
+async def test_owned_paused_still_can_be_stopped_after_fresh_ownership_check() -> None:
+    coordinator, queue, _selector, cast = make_coordinator()
+    await drive_idle_to_load(coordinator, queue)
+    _generation, url, _mime, metadata = cast.loads[-1]
+    await coordinator.handle(
+        event(EventKind.RECEIVER, receiver=ReceiverStatus("CC1AD845", "session"))
+    )
+    await coordinator.handle(event(EventKind.MEDIA, media=MediaStatus("PAUSED", url, 3, metadata)))
+    runner = asyncio.create_task(coordinator.run())
+
+    refresh_count = len(cast.refreshes)
+    command = asyncio.create_task(coordinator.stop("paused-stop"))
+    await wait_until(lambda: len(cast.refreshes) > refresh_count)
+    await coordinator.handle(
+        event(EventKind.RECEIVER, receiver=ReceiverStatus("CC1AD845", "session"))
+    )
+    await coordinator.handle(event(EventKind.MEDIA, media=MediaStatus("PAUSED", url, 3, metadata)))
+
+    assert await command is CommandResult.APPLIED
+    assert cast.stops == [1]
+    await coordinator.close()
+    runner.cancel()
 
 
 @pytest.mark.asyncio

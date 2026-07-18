@@ -22,16 +22,23 @@ from cast_immich.config import ChromecastSettings
 class MediaController:
     def __init__(self) -> None:
         self.calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+        self.is_active = True
 
     def play_media(self, *args: Any, **kwargs: Any) -> None:
         self.calls.append((args, kwargs))
+        callback = kwargs.get("callback_function")
+        if callback is not None:
+            callback(True, {"type": "MEDIA_STATUS"})
 
     def stop(self, **kwargs: Any) -> None:
         self.calls.append((("stop",), kwargs))
 
+    def update_status(self) -> None:
+        self.calls.append((("update_status",), {}))
+
 
 @pytest.mark.asyncio
-async def test_load_uses_buffered_media_and_custom_ownership_data() -> None:
+async def test_load_uses_live_media_and_custom_ownership_data() -> None:
     queue: asyncio.Queue[Any] = asyncio.Queue()
     adapter = CastAdapter(ChromecastSettings(UUID(int=1), 1, 1), queue)
     adapter._loop = asyncio.get_running_loop()
@@ -44,9 +51,56 @@ async def test_load_uses_buffered_media_and_custom_ownership_data() -> None:
     assert sent is True
     args, kwargs = controller.calls[0]
     assert args == ("http://lan/image/token", "image/webp")
-    assert kwargs["stream_type"] == "BUFFERED"
+    assert kwargs["stream_type"] == "LIVE"
     assert kwargs["media_info"] == {"customData": {"loadId": "x"}}
+    assert kwargs["callback_function"] is not None
     assert await adapter.load_image(3, "http://bad", "image/jpeg", {}) is False
+
+
+@pytest.mark.asyncio
+async def test_refresh_requests_receiver_and_media_status() -> None:
+    adapter = CastAdapter(ChromecastSettings(UUID(int=1), 1, 1), asyncio.Queue())
+    adapter._generation = 4
+    receiver_calls: list[str] = []
+    controller = MediaController()
+    adapter._cast = SimpleNamespace(
+        socket_client=SimpleNamespace(
+            receiver_controller=SimpleNamespace(
+                update_status=lambda: receiver_calls.append("update_status")
+            )
+        ),
+        media_controller=controller,
+    )
+
+    await adapter.refresh_status(4)
+
+    assert receiver_calls == ["update_status"]
+    assert controller.calls == [(("update_status",), {})]
+
+
+@pytest.mark.asyncio
+async def test_refresh_does_not_launch_inactive_media_receiver() -> None:
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    adapter = CastAdapter(ChromecastSettings(UUID(int=1), 1, 1), queue)
+    adapter._loop = asyncio.get_running_loop()
+    adapter._generation = 4
+    controller = MediaController()
+    controller.is_active = False
+    adapter._cast = SimpleNamespace(
+        socket_client=SimpleNamespace(
+            receiver_controller=SimpleNamespace(update_status=lambda: None)
+        ),
+        media_controller=controller,
+    )
+
+    await adapter.refresh_status(4)
+
+    assert controller.calls == []
+    event = await asyncio.wait_for(queue.get(), 1)
+    assert event.kind is EventKind.MEDIA
+    assert event.media.player_state == "UNKNOWN"
+    assert event.media.content_id is None
+    assert event.media.media_session_id is None
 
 
 @pytest.mark.asyncio

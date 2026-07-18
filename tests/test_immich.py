@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from uuid import UUID
 
@@ -62,6 +63,27 @@ async def test_search_contract_filters_and_preview_authentication(serve_app: Any
         "isOffline": False,
         "size": 50,
     }
+
+
+@pytest.mark.asyncio
+async def test_preview_reads_all_network_chunks(serve_app: Any) -> None:
+    async def preview(request: web.Request) -> web.StreamResponse:
+        response = web.StreamResponse(headers={"Content-Type": "image/jpeg"})
+        await response.prepare(request)
+        await response.write(b"first-")
+        await asyncio.sleep(0.01)
+        await response.write(b"second")
+        await response.write_eof()
+        return response
+
+    app = web.Application()
+    app.router.add_get("/api/assets/{asset_id}/thumbnail", preview)
+    server = await serve_app(app)
+    settings = ImmichSettings(str(server.make_url("/")).rstrip("/"), "secret", 2, 1)
+    async with ImmichClient(settings) as client:
+        result = await client.fetch_preview(ASSET_ID)
+
+    assert result.body == b"first-second"
 
 
 @pytest.mark.asyncio

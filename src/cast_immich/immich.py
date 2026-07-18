@@ -115,15 +115,17 @@ class ImmichClient:
             self._raise_for_status(response.status)
             content_type = response.headers.get("Content-Type", "").split(";", 1)[0].lower()
             limit = max_bytes or 25_000_000
+            body = bytearray()
             try:
-                body = await response.content.read(limit + 1)
+                async for chunk in response.content.iter_chunked(64 * 1024):
+                    body.extend(chunk)
+                    if len(body) > limit:
+                        raise AssetUnavailable("asset preview exceeds relay size limit")
             except (aiohttp.ClientError, TimeoutError) as error:
                 raise TransientImmichError("Immich preview download was interrupted") from error
-            if len(body) > limit:
-                raise AssetUnavailable("asset preview exceeds relay size limit")
             if not body:
                 raise AssetUnavailable("asset preview is empty")
-            return Preview(body, content_type)
+            return Preview(bytes(body), content_type)
 
     async def _json_request(self, method: str, path: str, **kwargs: Any) -> Any:
         response = await self._request(method, path, **kwargs)
