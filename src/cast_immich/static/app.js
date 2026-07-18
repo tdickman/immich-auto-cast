@@ -130,9 +130,9 @@ function renderOverview() {
     select.append(heading, receiver, summary);
     const actions = document.createElement("div");
     actions.className = "output-actions";
-    const rotationIsEnabled = rotationEnabled(output);
+    const autocastCommand = output.autocast_enabled ? "autocast_disable" : "autocast_enable";
     actions.append(
-      makeQuickButton(output, rotationIsEnabled ? "pause" : "enable", rotationIsEnabled ? "Pause" : "Enable", rotationIsEnabled ? "Ⅱ" : "▶"),
+      makeQuickButton(output, autocastCommand, output.autocast_enabled ? "Autocast off" : "Autocast on", "A"),
       makeQuickButton(output, "next", "Next", "→"),
     );
     card.append(select, actions);

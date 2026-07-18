@@ -208,6 +208,7 @@ async def test_dashboard_assets_expose_complete_operator_interface(
     assert 'command === "reconnect" ? {} : { request_id: requestId }' in javascript
     assert "addDiscoveredOutputs(state.devices)" in javascript
     assert "Save changes to activate" in javascript
+    assert 'output.autocast_enabled ? "autocast_disable" : "autocast_enable"' in javascript
     assert "@media (max-width: 520px)" in css
     assert "overflow-x: auto" in css
     assert page.headers["Cache-Control"] == "no-store"
