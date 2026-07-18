@@ -33,7 +33,7 @@ On Raspberry Pi OS or another Debian-based systemd distribution, clone the repos
 ./scripts/install.sh
 ```
 
-The installer installs system packages and `uv` as needed, creates the locked production environment in `.venv`, and installs a `cast-immich.service` system service. The service starts at boot, runs as the checkout owner, and restarts after failures. It continues in dashboard setup mode if `config.toml` does not exist yet.
+The installer installs system packages and `uv` as needed, creates the locked production environment in `.venv`, and installs an `immich-auto-cast.service` system service. The service starts at boot, runs as the checkout owner, and restarts after failures. It continues in dashboard setup mode if `config.toml` does not exist yet.
 
 The dashboard binds to `127.0.0.1:8080` by default. To make it available to devices on a trusted LAN, reinstall with an explicit bind address (do not expose it to an untrusted network):
 
@@ -44,13 +44,13 @@ CAST_IMMICH_WEB_HOST=0.0.0.0 ./scripts/install.sh
 Service operations:
 
 ```console
-sudo systemctl status cast-immich
-sudo journalctl -u cast-immich -f
-sudo systemctl restart cast-immich
-sudo cast-immich-update
+sudo systemctl status immich-auto-cast
+sudo journalctl -u immich-auto-cast -f
+sudo systemctl restart immich-auto-cast
+sudo immich-auto-cast-update
 ```
 
-`cast-immich-update` performs a fast-forward-only pull from the branch's configured Git upstream, synchronizes dependencies from `uv.lock`, and restarts the service. Local configuration, installation identity, and state are ignored by Git and remain in the checkout. Re-run the installer if a release changes the systemd installation itself. Back up `config.toml`, `installation-id`, and `state.json`; restoring all three preserves configuration, ownership identity, pause/autocast settings, selected sources, recent-image exclusion, and bounded display history.
+`immich-auto-cast-update` performs a fast-forward-only pull from the branch's configured Git upstream, synchronizes dependencies from `uv.lock`, and restarts the service. Local configuration, installation identity, and state are ignored by Git and remain in the checkout. Re-run the installer if a release changes the systemd installation itself. Back up `config.toml`, `installation-id`, and `state.json`; restoring all three preserves configuration, ownership identity, pause/autocast settings, selected sources, recent-image exclusion, and bounded display history.
 
 `network-online.target` only orders startup; it does not guarantee that Wi-Fi, Immich, or a Chromecast stays available. The application retries discovery and every operational Immich failure indefinitely with bounded cooldowns, while systemd restarts it after an unhandled process failure. Authorization and incompatible API responses are shown as attention conditions but continue retrying. On restart, the persistent installation ID lets the service recognize receiver metadata that still proves ownership, renew the same asset with a fresh relay URL, and continue yielding to external or ambiguous playback.
 

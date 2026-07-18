@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SERVICE_NAME="cast-immich"
+SERVICE_NAME="immich-auto-cast"
+LEGACY_SERVICE_NAME="cast-immich"
 WEB_HOST="${CAST_IMMICH_WEB_HOST:-127.0.0.1}"
 WEB_PORT="${CAST_IMMICH_WEB_PORT:-8080}"
 
 fail() {
-    printf 'cast-immich install: %s\n' "$*" >&2
+    printf 'immich-auto-cast install: %s\n' "$*" >&2
     exit 1
 }
 
@@ -113,10 +114,16 @@ systemd-analyze verify "$UNIT_TMP"
 sudo install -m 0644 "$UNIT_TMP" "/etc/systemd/system/$SERVICE_NAME.service"
 sudo install -m 0600 "$UPDATE_CONFIG_TMP" "/etc/$SERVICE_NAME-install.conf"
 sudo install -m 0755 "$SCRIPT_DIR/update.sh" "/usr/local/bin/$SERVICE_NAME-update"
+if [[ -e "/etc/systemd/system/$LEGACY_SERVICE_NAME.service" ]]; then
+    sudo systemctl disable "$LEGACY_SERVICE_NAME.service"
+    sudo systemctl stop "$LEGACY_SERVICE_NAME.service" || true
+    sudo rm -f "/etc/systemd/system/$LEGACY_SERVICE_NAME.service"
+fi
+sudo rm -f "/etc/$LEGACY_SERVICE_NAME-install.conf" "/usr/local/bin/$LEGACY_SERVICE_NAME-update"
 sudo systemctl daemon-reload
 sudo systemctl enable --now "$SERVICE_NAME.service"
 
-printf '\ncast-immich is installed and enabled at boot.\n'
+printf '\nimmich-auto-cast is installed and enabled at boot.\n'
 printf 'Dashboard: http://%s:%s\n' "$WEB_HOST" "$WEB_PORT"
 printf 'Status:    sudo systemctl status %s\n' "$SERVICE_NAME"
 printf 'Logs:      sudo journalctl -u %s -f\n' "$SERVICE_NAME"
