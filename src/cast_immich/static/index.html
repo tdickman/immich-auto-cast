@@ -20,9 +20,28 @@
     </header>
 
     <main>
+      <section class="outputs-overview" aria-labelledby="outputs-title">
+        <div class="overview-heading">
+          <div>
+            <p class="eyebrow">Connected rooms</p>
+            <h2 id="outputs-title">Outputs</h2>
+          </div>
+          <span class="output-total" id="output-total">0 outputs</span>
+        </div>
+        <div class="output-rail" id="output-list" aria-live="polite"></div>
+      </section>
+
+      <section class="no-output-state" id="no-output-state" hidden aria-labelledby="no-output-title">
+        <p class="eyebrow">Setup required</p>
+        <h1 id="no-output-title">Add your first output.</h1>
+        <p>Open Settings, name a room, and choose its Chromecast receiver.</p>
+        <button class="save-button" id="open-settings-button" type="button">Open settings</button>
+      </section>
+
+      <div id="selected-workspace" hidden aria-labelledby="workspace-output-name">
       <section class="control-stage" aria-labelledby="control-title">
         <div class="stage-copy">
-          <p class="eyebrow">Photo cast</p>
+          <p class="eyebrow" id="workspace-output-name">Selected output</p>
           <h1 id="control-title">Your photos,<br>on the big screen.</h1>
           <p class="stage-note" id="ownership-note">Connecting to your receiver...</p>
         </div>
@@ -64,6 +83,9 @@
             <button class="control-button" id="autocast-toggle" type="button">
               <span class="button-mark">A</span><span>Autocast on</span>
             </button>
+            <button class="control-button" id="reconnect-button" type="button">
+              <span class="button-mark">↻</span><span>Reconnect</span>
+            </button>
           </div>
         </div>
       </section>
@@ -97,6 +119,7 @@
           </div>
         </div>
       </section>
+      </div>
 
       <details class="settings-section">
         <summary>
@@ -104,7 +127,7 @@
           <span class="summary-action">Edit</span>
         </summary>
         <form id="settings-form" class="settings-form">
-          <div class="settings-grid">
+          <div class="settings-grid shared-settings">
           <fieldset>
             <legend>Immich</legend>
             <label>Server URL<input name="immich.url" type="url" required autocomplete="url"></label>
@@ -113,16 +136,19 @@
           </fieldset>
 
           <fieldset>
-            <legend>Chromecast</legend>
-            <label>Receiver
-              <select name="chromecast.uuid" id="chromecast-select" required>
-                <option value="">Choose a receiver</option>
-              </select>
-            </label>
+            <legend>Discovery</legend>
+            <p class="field-hint">Scan once to populate the receiver selector for every output.</p>
             <button class="inline-button" id="discover-button" type="button">Scan the network</button>
-            <label>Seconds per photo<input name="rotation.interval" type="number" min="0.1" step="0.1" required></label>
           </fieldset>
           </div>
+
+          <section class="output-settings" aria-labelledby="output-settings-title">
+            <div class="output-settings-heading">
+              <div><h2 id="output-settings-title">Outputs</h2><p class="field-hint">Each output keeps its own receiver, source, and rotation schedule.</p></div>
+              <button class="inline-button" type="button" data-settings-action="add">Add output</button>
+            </div>
+            <div id="output-settings-list"></div>
+          </section>
 
           <details class="advanced-settings">
             <summary>Advanced settings</summary>
@@ -132,10 +158,6 @@
               <div class="field-pair">
                 <label>Request timeout<input name="immich.request_timeout" type="number" min="0.1" step="0.1" required></label>
                 <label>Retry attempts<input name="immich.retry_attempts" type="number" min="1" step="1" required></label>
-              </div>
-              <div class="field-pair">
-                <label>Discovery timeout<input name="chromecast.discovery_timeout" type="number" min="0.1" step="0.1" required></label>
-                <label>Load timeout<input name="chromecast.load_timeout" type="number" min="0.1" step="0.1" required></label>
               </div>
             </fieldset>
             <fieldset>
@@ -150,19 +172,6 @@
               <label>Concurrent requests<input name="relay.max_concurrent" type="number" min="1" step="1" required></label>
             </div>
             <label>Maximum image bytes<input name="relay.max_response_bytes" type="number" min="1" step="1" required></label>
-            </fieldset>
-
-            <fieldset>
-            <legend>Rotation</legend>
-            <div class="field-pair">
-              <label>Idle status debounce<input name="rotation.idle_debounce" type="number" min="0.1" step="0.1" required></label>
-              <label>Autocast idle delay<input name="rotation.autocast_delay" type="number" min="0.1" step="0.1" required></label>
-              <label>Failure cooldown<input name="rotation.cooldown" type="number" min="0.1" step="0.1" required></label>
-            </div>
-            <div class="field-pair">
-              <label>Repeat exclusion<input name="rotation.recent_history" type="number" min="1" step="1" required></label>
-              <label>Candidate batch<input name="rotation.candidate_batch" type="number" min="1" max="1000" step="1" required></label>
-            </div>
             </fieldset>
 
             <fieldset>

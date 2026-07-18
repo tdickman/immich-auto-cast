@@ -99,6 +99,39 @@ def test_history_json_is_versioned_and_contains_no_extra_records(tmp_path: Path)
     store.record_display("load-1", "asset-1")
 
     persisted = json.loads(path.read_text(encoding="utf-8"))
-    assert persisted["version"] == 1
-    assert persisted["rotation_enabled"] is True
-    assert len(persisted["records"]) == 1
+    assert persisted["version"] == 2
+    assert persisted["outputs"]["default"]["rotation_enabled"] is True
+    assert len(persisted["outputs"]["default"]["records"]) == 1
+
+
+def test_outputs_are_isolated_and_removed_output_state_is_preserved(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    store = HistoryStore(path)
+    kitchen = store.for_output("kitchen")
+    office = store.for_output("office")
+
+    kitchen.set_rotation_enabled(False)
+    kitchen.record_display("kitchen-load", "kitchen-asset")
+    office.record_display("office-load", "office-asset")
+
+    assert kitchen.load().rotation_enabled is False
+    assert [item.asset_id for item in kitchen.load().records] == ["kitchen-asset"]
+    assert [item.asset_id for item in office.load().records] == ["office-asset"]
+    office.set_autocast_enabled(False)
+    assert "kitchen" in json.loads(path.read_text())["outputs"]
+
+
+def test_v1_maps_to_default_and_is_not_rewritten_until_mutation(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    original = b'{"version":1,"rotation_enabled":false,"records":[]}\n'
+    path.write_bytes(original)
+    store = HistoryStore(path)
+
+    assert store.for_output("default").load().rotation_enabled is False
+    assert store.for_output("other").load().rotation_enabled is True
+    assert path.read_bytes() == original
+
+    store.for_output("other").set_autocast_enabled(False)
+    document = json.loads(path.read_text())
+    assert document["version"] == 2
+    assert document["outputs"]["default"]["rotation_enabled"] is False

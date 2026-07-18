@@ -8,12 +8,9 @@ import signal
 from pathlib import Path
 from typing import Any
 
-from .cast import CastAdapter
 from .config import Settings
-from .coordinator import Coordinator, CoordinatorEvent
-from .immich import ImmichClient
-from .relay import ImageRelay
-from .runtime import RuntimeSupervisor
+from .history import HistoryStore
+from .runtime import RuntimeSupervisor, ServiceGraph
 from .web import ManagementServer
 
 
@@ -51,47 +48,30 @@ async def run_service(settings: Settings, stop: asyncio.Event | None = None) -> 
                 loop.add_signal_handler(signum, stop_event.set)
                 installed_signals.append(signum)
 
-    queue: asyncio.Queue[CoordinatorEvent] = asyncio.Queue()
-    immich = ImmichClient(settings.immich)
-    relay = ImageRelay(settings.relay, immich)
-    cast = CastAdapter(settings.chromecast, queue)  # type: ignore[arg-type]
-    coordinator = Coordinator(
-        queue,
-        immich,
-        relay,
-        cast,
-        settings.rotation,
-        settings.service.installation_id,
-        settings.chromecast.load_timeout,
-    )
-    coordinator_task: asyncio.Task[None] | None = None
+    history = HistoryStore(settings.service.installation_id_file.with_name("state.json"))
+    graph = ServiceGraph(settings, history)
     stop_task: asyncio.Task[bool] | None = None
+    coordinator_task: asyncio.Task[None] | None = None
     try:
-        await immich.start()
-        await relay.start()
-        coordinator_task = asyncio.create_task(coordinator.run(), name="coordinator")
-        await cast.start()
+        await graph.stage()
+        await graph.start()
         logger.info("service_started", extra={"reason": "startup_complete"})
         stop_task = asyncio.create_task(stop_event.wait(), name="shutdown-signal")
+        coordinator_task = asyncio.create_task(
+            graph.wait_for_coordinator_exit(), name="coordinator-monitor"
+        )
         done, _ = await asyncio.wait(
-            {coordinator_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
+            {stop_task, coordinator_task}, return_when=asyncio.FIRST_COMPLETED
         )
         if coordinator_task in done:
             await coordinator_task
     finally:
-        await coordinator.close()
-        if coordinator_task is not None and not coordinator_task.done():
-            coordinator_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await coordinator_task
-        await cast.close()
-        await relay.close()
-        await immich.close()
-        for task in (coordinator_task, stop_task):
+        for task in (stop_task, coordinator_task):
             if task is not None and not task.done():
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+        await graph.close()
         for signum in installed_signals:
             loop.remove_signal_handler(signum)
         logger.info("service_stopped", extra={"reason": "shutdown_complete"})

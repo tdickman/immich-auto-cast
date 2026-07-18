@@ -14,10 +14,17 @@ from cast_immich.config import ConfigPersistenceError, Settings
 from cast_immich.coordinator import Command, CommandResult, CoordinatorSnapshot, State
 from cast_immich.history import DisplayRecord, HistoryState, HistoryStore
 from cast_immich.immich import AssetUnavailable, Preview
-from cast_immich.runtime import ApplyStatus, RuntimeMode, RuntimeSupervisor, ServiceGraph
+from cast_immich.runtime import (
+    ApplyStatus,
+    OutputSnapshot,
+    RuntimeMode,
+    RuntimeSupervisor,
+    ServiceGraph,
+    _OutputRuntime,
+)
 
 
-def form(*, port: int = 8787, interval: float = 30) -> dict[str, dict[str, Any]]:
+def form(*, port: int = 8787, interval: float = 30) -> dict[str, Any]:
     return {
         "immich": {
             "url": "https://photos.example",
@@ -25,11 +32,21 @@ def form(*, port: int = 8787, interval: float = 30) -> dict[str, dict[str, Any]]
             "request_timeout": 5,
             "retry_attempts": 2,
         },
-        "chromecast": {
-            "uuid": "12345678-1234-4234-8234-123456789abc",
-            "discovery_timeout": 3,
-            "load_timeout": 4,
-        },
+        "outputs": [
+            {
+                "id": "default",
+                "name": "Chromecast",
+                "uuid": "12345678-1234-4234-8234-123456789abc",
+                "discovery_timeout": 3,
+                "load_timeout": 4,
+                "interval": interval,
+                "idle_debounce": 1,
+                "cooldown": 2,
+                "recent_history": 10,
+                "candidate_batch": 20,
+                "autocast_delay": 30,
+            }
+        ],
         "relay": {
             "bind_host": "127.0.0.1",
             "port": port,
@@ -37,13 +54,6 @@ def form(*, port: int = 8787, interval: float = 30) -> dict[str, dict[str, Any]]
             "token_lifetime": 60,
             "max_response_bytes": 1000,
             "max_concurrent": 2,
-        },
-        "rotation": {
-            "interval": interval,
-            "idle_debounce": 1,
-            "cooldown": 2,
-            "recent_history": 10,
-            "candidate_batch": 20,
         },
         "service": {"installation_id_file": "identity", "log_level": "INFO"},
     }
@@ -69,7 +79,7 @@ token_lifetime = 60
 max_response_bytes = 1000
 max_concurrent = 2
 [rotation]
-interval = {values["rotation"]["interval"]}
+interval = {values["outputs"][0]["interval"]}
 idle_debounce = 1
 cooldown = 2
 recent_history = 10
@@ -83,7 +93,13 @@ revision = 0
 
 class FakeGraph:
     def __init__(
-        self, call: int, *, fail_stage: bool, fail_start: bool, fail_validate: bool
+        self,
+        call: int,
+        settings: Settings,
+        *,
+        fail_stage: bool,
+        fail_start: bool,
+        fail_validate: bool,
     ) -> None:
         self.call = call
         self.fail_stage = fail_stage
@@ -94,12 +110,25 @@ class FakeGraph:
         self.closes = 0
         self.reconnects = 0
         self.quiesces = 0
-        self.commands: list[tuple[Command, str]] = []
+        self.output_specs = settings.outputs
+        self.commands: list[tuple[str, Command, str]] = []
         self.thumbnails: list[str] = []
 
     @property
     def coordinator_snapshot(self) -> CoordinatorSnapshot:
         return CoordinatorSnapshot(State.UNAVAILABLE, True, self.call)
+
+    @property
+    def output_snapshots(self) -> tuple[OutputSnapshot, ...]:
+        return tuple(
+            OutputSnapshot(
+                output.id,
+                output.name,
+                output.chromecast.uuid,
+                self.coordinator_snapshot,
+            )
+            for output in self.output_specs
+        )
 
     async def stage(self) -> None:
         self.stages += 1
@@ -115,11 +144,13 @@ class FakeGraph:
         if self.fail_start:
             raise OSError("start failed")
 
-    async def command(self, command: Command, request_id: str) -> CommandResult:
-        self.commands.append((command, request_id))
+    async def command(self, output_id: str, command: Command, request_id: str) -> CommandResult:
+        assert output_id in {output.id for output in self.output_specs}
+        self.commands.append((output_id, command, request_id))
         return CommandResult.APPLIED
 
-    async def reconnect(self) -> None:
+    async def reconnect(self, output_id: str) -> None:
+        assert output_id in {output.id for output in self.output_specs}
         self.reconnects += 1
 
     def transfer_capabilities_to(self, target: object) -> None:
@@ -128,13 +159,15 @@ class FakeGraph:
     async def quiesce(self) -> None:
         self.quiesces += 1
 
-    async def thumbnail(self, event_id: str) -> Preview:
+    async def thumbnail(self, output_id: str, event_id: str) -> Preview:
+        assert output_id == "default"
         self.thumbnails.append(event_id)
         if event_id != "current-event":
             raise AssetUnavailable("not current")
         return Preview(b"image", "image/jpeg")
 
-    async def upcoming_thumbnail(self, asset_id: UUID) -> Preview:
+    async def upcoming_thumbnail(self, output_id: str, asset_id: UUID) -> Preview:
+        assert output_id == "default"
         value = str(asset_id)
         self.thumbnails.append(value)
         if asset_id != UUID(int=8):
@@ -162,6 +195,7 @@ class Factory:
         call = len(self.graphs) + 1
         graph = FakeGraph(
             call,
+            _settings,
             fail_stage=call in self.fail_stage_calls,
             fail_start=call in self.fail_start_calls,
             fail_validate=call in self.fail_validate_calls,
@@ -318,7 +352,7 @@ async def test_candidate_validation_failure_keeps_previous_graph_active(tmp_path
     supervisor = RuntimeSupervisor(path, graph_factory=factory, environ={})
     await supervisor.start()
     changed = supervisor.config_snapshot.form_values
-    changed["rotation"]["interval"] = 90
+    changed["outputs"][0]["interval"] = 90
 
     result = await supervisor.apply_settings(changed, expected_revision=0)
 
@@ -340,17 +374,17 @@ async def test_slow_thumbnail_does_not_block_controls(tmp_path: Path) -> None:
     started = asyncio.Event()
     release = asyncio.Event()
 
-    async def blocked_thumbnail(_event_id: str) -> Preview:
+    async def blocked_thumbnail(_output_id: str, _event_id: str) -> Preview:
         started.set()
         await release.wait()
         return Preview(b"image", "image/jpeg")
 
     factory.graphs[0].thumbnail = blocked_thumbnail  # type: ignore[method-assign]
-    thumbnail = asyncio.create_task(supervisor.thumbnail("current-event"))
+    thumbnail = asyncio.create_task(supervisor.thumbnail("default", "current-event"))
     await started.wait()
 
     assert (
-        await asyncio.wait_for(supervisor.pause("pause-during-thumbnail"), 0.1)
+        await asyncio.wait_for(supervisor.pause("default", "pause-during-thumbnail"), 0.1)
         is CommandResult.APPLIED
     )
     release.set()
@@ -376,17 +410,19 @@ async def test_controls_reconnect_and_discovery_delegate_to_active_boundaries(
     supervisor = RuntimeSupervisor(path, graph_factory=factory, discovery=discover, environ={})
     await supervisor.start()
 
-    assert await supervisor.pause("pause-1") is CommandResult.APPLIED
-    assert await supervisor.reconnect() is True
+    assert await supervisor.pause("default", "pause-1") is CommandResult.APPLIED
+    assert await supervisor.reconnect("default") is True
     assert await supervisor.discover() == (receiver,)
-    assert factory.graphs[0].commands == [(Command.PAUSE, "pause-1")]
+    assert factory.graphs[0].commands == [("default", Command.PAUSE, "pause-1")]
     assert factory.graphs[0].reconnects == 1
     assert discovery_calls == [3.0]
     assert receiver.uuid == form_uuid
-    assert await supervisor.thumbnail("current-event") == Preview(b"image", "image/jpeg")
-    assert await supervisor.upcoming_thumbnail(UUID(int=8)) == Preview(b"upcoming", "image/jpeg")
+    assert await supervisor.thumbnail("default", "current-event") == Preview(b"image", "image/jpeg")
+    assert await supervisor.upcoming_thumbnail("default", UUID(int=8)) == Preview(
+        b"upcoming", "image/jpeg"
+    )
     with pytest.raises(AssetUnavailable):
-        await supervisor.thumbnail("arbitrary-asset-id")
+        await supervisor.thumbnail("default", "arbitrary-asset-id")
     assert factory.graphs[0].thumbnails == [
         "current-event",
         str(UUID(int=8)),
@@ -406,14 +442,14 @@ async def test_history_calls_run_off_event_loop_and_shutdown_is_idempotent(
     await supervisor.start()
     event_loop_thread = threading.get_ident()
     called_on: list[int] = []
-    original = supervisor.history_store.load
+    original = supervisor.history_store._load_output
 
-    def tracked_load() -> Any:
+    def tracked_load(output_id: str) -> Any:
         called_on.append(threading.get_ident())
-        return original()
+        return original(output_id)
 
-    monkeypatch.setattr(supervisor.history_store, "load", tracked_load)
-    await supervisor.history_snapshot()
+    monkeypatch.setattr(supervisor.history_store, "_load_output", tracked_load)
+    await supervisor.history_snapshot("default")
     await supervisor.close()
     await supervisor.close()
 
@@ -444,16 +480,18 @@ async def test_service_graph_thumbnail_requires_current_history_membership() -> 
             return Preview(b"preview", "image/jpeg")
 
     graph: Any = object.__new__(ServiceGraph)
-    graph._history = History()
     graph._immich = Immich()
     graph._thumbnail_max_bytes = 2048
-    graph._coordinator = type(
-        "Coordinator", (), {"snapshot": CoordinatorSnapshot(State.OWNED, True, 1)}
-    )()
+    coordinator = type("Coordinator", (), {"snapshot": CoordinatorSnapshot(State.OWNED, True, 1)})()
+    graph._outputs = {
+        "default": _OutputRuntime(
+            "default", "Chromecast", UUID(int=1), Any, coordinator, History(), 1
+        )
+    }
 
     with pytest.raises(AssetUnavailable):
-        await graph.thumbnail("arbitrary-asset-id")
-    preview = await graph.thumbnail("current-event")
+        await graph.thumbnail("default", "arbitrary-asset-id")
+    preview = await graph.thumbnail("default", "current-event")
 
     assert preview == Preview(b"preview", "image/jpeg")
     assert graph._immich.calls == [(UUID("12345678-1234-4234-8234-123456789abc"), 2048)]
@@ -471,12 +509,42 @@ async def test_service_graph_upcoming_thumbnail_requires_queue_membership() -> N
     graph: Any = object.__new__(ServiceGraph)
     graph._immich = Immich()
     graph._thumbnail_max_bytes = 2048
-    graph._coordinator = type(
+    coordinator = type(
         "Coordinator",
         (),
         {"snapshot": CoordinatorSnapshot(State.OWNED, True, 1, upcoming_assets=(asset_id,))},
     )()
+    graph._outputs = {
+        "default": _OutputRuntime("default", "Chromecast", UUID(int=1), Any, coordinator, Any, 1)
+    }
 
     with pytest.raises(AssetUnavailable):
-        await graph.upcoming_thumbnail(UUID(int=9))
-    assert await graph.upcoming_thumbnail(asset_id) == Preview(b"preview", "image/jpeg")
+        await graph.upcoming_thumbnail("default", UUID(int=9))
+    assert await graph.upcoming_thumbnail("default", asset_id) == Preview(b"preview", "image/jpeg")
+
+
+@pytest.mark.asyncio
+async def test_supervisor_routes_commands_and_history_by_output(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    values = form()
+    values["outputs"].append(
+        {
+            **values["outputs"][0],
+            "id": "office",
+            "name": "Office",
+            "uuid": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        }
+    )
+    factory = Factory()
+    supervisor = RuntimeSupervisor(path, graph_factory=factory, environ={})
+    await supervisor.start()
+
+    result = await supervisor.apply_settings(values, expected_revision=0)
+
+    assert [output.id for output in result.snapshot.outputs] == ["default", "office"]
+    assert await supervisor.pause("office", "office-pause") is CommandResult.APPLIED
+    supervisor.history_store.for_output("office").set_rotation_enabled(False)
+    assert (await supervisor.history_snapshot("default")).rotation_enabled is True
+    assert (await supervisor.history_snapshot("office")).rotation_enabled is False
+    assert factory.graphs[0].commands == [("office", Command.PAUSE, "office-pause")]
+    await supervisor.close()

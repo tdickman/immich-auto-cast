@@ -77,6 +77,14 @@ class RotationSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class OutputSettings:
+    id: str
+    name: str
+    chromecast: ChromecastSettings
+    rotation: RotationSettings
+
+
+@dataclass(frozen=True, slots=True)
 class ServiceSettings:
     installation_id_file: Path
     installation_id: UUID
@@ -86,17 +94,24 @@ class ServiceSettings:
 @dataclass(frozen=True, slots=True)
 class Settings:
     immich: ImmichSettings
-    chromecast: ChromecastSettings
+    outputs: tuple[OutputSettings, ...]
     relay: RelaySettings
-    rotation: RotationSettings
     service: ServiceSettings
+
+    @property
+    def chromecast(self) -> ChromecastSettings:
+        return self.outputs[0].chromecast
+
+    @property
+    def rotation(self) -> RotationSettings:
+        return self.outputs[0].rotation
 
 
 @dataclass(frozen=True, slots=True)
 class SettingsDocument:
     settings: Settings = field(repr=False)
     revision: int
-    form_values: dict[str, dict[str, Any]]
+    form_values: dict[str, Any]
     api_key_configured: bool
     api_key_source: SecretSource
 
@@ -111,7 +126,7 @@ class SettingsCandidate:
     previous_content: bytes | None = field(repr=False)
 
 
-def default_form_values() -> dict[str, dict[str, Any]]:
+def default_form_values() -> dict[str, Any]:
     """Return a complete, secret-free form for first-run setup."""
     return {
         "immich": {
@@ -120,11 +135,21 @@ def default_form_values() -> dict[str, dict[str, Any]]:
             "request_timeout": 15,
             "retry_attempts": 3,
         },
-        "chromecast": {
-            "uuid": "",
-            "discovery_timeout": 10,
-            "load_timeout": 15,
-        },
+        "outputs": [
+            {
+                "id": "default",
+                "name": "Chromecast",
+                "uuid": "",
+                "discovery_timeout": 10,
+                "load_timeout": 15,
+                "interval": 60,
+                "idle_debounce": 3,
+                "cooldown": 15,
+                "recent_history": 25,
+                "candidate_batch": 50,
+                "autocast_delay": 30,
+            }
+        ],
         "relay": {
             "bind_host": "0.0.0.0",
             "port": 8787,
@@ -132,14 +157,6 @@ def default_form_values() -> dict[str, dict[str, Any]]:
             "token_lifetime": 120,
             "max_response_bytes": 25_000_000,
             "max_concurrent": 4,
-        },
-        "rotation": {
-            "interval": 60,
-            "idle_debounce": 3,
-            "cooldown": 15,
-            "recent_history": 25,
-            "candidate_batch": 50,
-            "autocast_delay": 30,
         },
         "service": {"installation_id_file": "installation-id", "log_level": "INFO"},
     }
@@ -204,10 +221,25 @@ def _parse_candidate(
     installation_id: UUID,
 ) -> tuple[Settings, int, str | None, SecretSource]:
     immich = _table(data, "immich")
-    cast = _table(data, "chromecast")
     relay = _table(data, "relay")
-    rotation = _table(data, "rotation")
     service = _table(data, "service")
+
+    raw_outputs = data.get("outputs")
+    has_legacy = "chromecast" in data or "rotation" in data
+    if raw_outputs is not None and has_legacy:
+        _fail("cannot mix [[outputs]] with [chromecast] or [rotation]")
+    if raw_outputs is None:
+        cast = _table(data, "chromecast")
+        rotation = _table(data, "rotation")
+        output_tables: list[dict[str, Any]] = [
+            {"id": "default", "name": "Chromecast", **cast, **rotation}
+        ]
+    elif not isinstance(raw_outputs, list) or not raw_outputs:
+        _fail("outputs must be a non-empty list")
+    elif not all(isinstance(item, dict) for item in raw_outputs):
+        _fail("each output must be a table")
+    else:
+        output_tables = raw_outputs
 
     raw_url = str(_required(immich, "url", "immich")).rstrip("/")
     parsed_url = urlparse(raw_url)
@@ -235,11 +267,6 @@ def _parse_candidate(
     else:
         _fail("missing immich.api_key")
 
-    try:
-        cast_uuid = UUID(str(_required(cast, "uuid", "chromecast")))
-    except ValueError:
-        _fail("chromecast.uuid must be a valid UUID")
-
     advertised_host = str(_required(relay, "advertised_host", "relay"))
     try:
         address = ipaddress.ip_address(advertised_host)
@@ -266,11 +293,63 @@ def _parse_candidate(
     if token_lifetime > 600:
         _fail("relay.token_lifetime must not exceed 600 seconds")
 
-    discovery_timeout = float(
-        _positive(cast.get("discovery_timeout", 10), "chromecast.discovery_timeout")
-    )
-    if discovery_timeout > 30:
-        _fail("chromecast.discovery_timeout must not exceed 30 seconds")
+    outputs: list[OutputSettings] = []
+    output_ids: set[str] = set()
+    cast_uuids: set[UUID] = set()
+    for index, output in enumerate(output_tables):
+        section = f"outputs[{index}]"
+        output_id = str(_required(output, "id", section))
+        if re.fullmatch(r"[A-Za-z0-9_-]+", output_id) is None:
+            _fail(f"{section}.id must be URL-safe")
+        if output_id in output_ids:
+            _fail("output IDs must be unique")
+        name = str(_required(output, "name", section)).strip()
+        if not name:
+            _fail(f"{section}.name must not be blank")
+        try:
+            cast_uuid = UUID(str(_required(output, "uuid", section)))
+        except ValueError:
+            _fail(f"{section}.uuid must be a valid UUID")
+        if cast_uuid in cast_uuids:
+            _fail("output Chromecast UUIDs must be unique")
+        discovery_timeout = float(
+            _positive(output.get("discovery_timeout", 10), f"{section}.discovery_timeout")
+        )
+        if discovery_timeout > 30:
+            _fail(f"{section}.discovery_timeout must not exceed 30 seconds")
+        outputs.append(
+            OutputSettings(
+                output_id,
+                name,
+                ChromecastSettings(
+                    cast_uuid,
+                    discovery_timeout,
+                    float(_positive(output.get("load_timeout", 15), f"{section}.load_timeout")),
+                ),
+                RotationSettings(
+                    float(_positive(output.get("interval", 60), f"{section}.interval")),
+                    float(_positive(output.get("idle_debounce", 3), f"{section}.idle_debounce")),
+                    float(_positive(output.get("cooldown", 15), f"{section}.cooldown")),
+                    int(
+                        _positive(
+                            output.get("recent_history", 25),
+                            f"{section}.recent_history",
+                            integer=True,
+                        )
+                    ),
+                    int(
+                        _positive(
+                            output.get("candidate_batch", 50),
+                            f"{section}.candidate_batch",
+                            integer=True,
+                        )
+                    ),
+                    float(_positive(output.get("autocast_delay", 30), f"{section}.autocast_delay")),
+                ),
+            )
+        )
+        output_ids.add(output_id)
+        cast_uuids.add(cast_uuid)
     log_level = str(service.get("log_level", "INFO")).upper()
     if log_level not in LOG_LEVELS:
         _fail("service.log_level must be DEBUG, INFO, WARNING, ERROR, or CRITICAL")
@@ -282,11 +361,7 @@ def _parse_candidate(
             float(_positive(immich.get("request_timeout", 15), "immich.request_timeout")),
             int(_positive(immich.get("retry_attempts", 3), "immich.retry_attempts", integer=True)),
         ),
-        chromecast=ChromecastSettings(
-            cast_uuid,
-            discovery_timeout,
-            float(_positive(cast.get("load_timeout", 15), "chromecast.load_timeout")),
-        ),
+        outputs=tuple(outputs),
         relay=RelaySettings(
             str(relay.get("bind_host", "0.0.0.0")),
             int(port),
@@ -300,24 +375,6 @@ def _parse_candidate(
                 )
             ),
             int(_positive(relay.get("max_concurrent", 4), "relay.max_concurrent", integer=True)),
-        ),
-        rotation=RotationSettings(
-            float(_positive(rotation.get("interval", 60), "rotation.interval")),
-            float(_positive(rotation.get("idle_debounce", 3), "rotation.idle_debounce")),
-            float(_positive(rotation.get("cooldown", 15), "rotation.cooldown")),
-            int(
-                _positive(
-                    rotation.get("recent_history", 25),
-                    "rotation.recent_history",
-                    integer=True,
-                )
-            ),
-            int(
-                _positive(
-                    rotation.get("candidate_batch", 50), "rotation.candidate_batch", integer=True
-                )
-            ),
-            float(_positive(rotation.get("autocast_delay", 30), "rotation.autocast_delay")),
         ),
         service=ServiceSettings(
             identity_path,
@@ -334,7 +391,7 @@ def _installation_path(data: dict[str, Any], path: Path) -> Path:
     return identity_path if identity_path.is_absolute() else path.parent / identity_path
 
 
-def _form_values(settings: Settings, path: Path) -> dict[str, dict[str, Any]]:
+def _form_values(settings: Settings, path: Path) -> dict[str, Any]:
     identity_path: str
     try:
         identity_path = str(settings.service.installation_id_file.relative_to(path.parent))
@@ -347,11 +404,22 @@ def _form_values(settings: Settings, path: Path) -> dict[str, dict[str, Any]]:
             "request_timeout": settings.immich.request_timeout,
             "retry_attempts": settings.immich.retry_attempts,
         },
-        "chromecast": {
-            "uuid": str(settings.chromecast.uuid),
-            "discovery_timeout": settings.chromecast.discovery_timeout,
-            "load_timeout": settings.chromecast.load_timeout,
-        },
+        "outputs": [
+            {
+                "id": output.id,
+                "name": output.name,
+                "uuid": str(output.chromecast.uuid),
+                "discovery_timeout": output.chromecast.discovery_timeout,
+                "load_timeout": output.chromecast.load_timeout,
+                "interval": output.rotation.interval,
+                "idle_debounce": output.rotation.idle_debounce,
+                "cooldown": output.rotation.cooldown,
+                "recent_history": output.rotation.recent_history,
+                "candidate_batch": output.rotation.candidate_batch,
+                "autocast_delay": output.rotation.autocast_delay,
+            }
+            for output in settings.outputs
+        ],
         "relay": {
             "bind_host": settings.relay.bind_host,
             "port": settings.relay.port,
@@ -359,14 +427,6 @@ def _form_values(settings: Settings, path: Path) -> dict[str, dict[str, Any]]:
             "token_lifetime": settings.relay.token_lifetime,
             "max_response_bytes": settings.relay.max_response_bytes,
             "max_concurrent": settings.relay.max_concurrent,
-        },
-        "rotation": {
-            "interval": settings.rotation.interval,
-            "idle_debounce": settings.rotation.idle_debounce,
-            "cooldown": settings.rotation.cooldown,
-            "recent_history": settings.rotation.recent_history,
-            "candidate_batch": settings.rotation.candidate_batch,
-            "autocast_delay": settings.rotation.autocast_delay,
         },
         "service": {
             "installation_id_file": identity_path,
@@ -406,7 +466,6 @@ def _serialize_configuration(
     lines: list[str] = []
     order = {
         "immich": ("url", "api_key", "request_timeout", "retry_attempts"),
-        "chromecast": ("uuid", "discovery_timeout", "load_timeout"),
         "relay": (
             "bind_host",
             "port",
@@ -414,14 +473,6 @@ def _serialize_configuration(
             "token_lifetime",
             "max_response_bytes",
             "max_concurrent",
-        ),
-        "rotation": (
-            "interval",
-            "idle_debounce",
-            "autocast_delay",
-            "cooldown",
-            "recent_history",
-            "candidate_batch",
         ),
         "service": ("installation_id_file", "log_level", "revision"),
     }
@@ -433,6 +484,26 @@ def _serialize_configuration(
             value = values[section].get(key)
             if value is None:
                 continue
+            rendered = _toml_string(value) if isinstance(value, str) else str(value).lower()
+            lines.append(f"{key} = {rendered}")
+        lines.append("")
+    output_keys = (
+        "id",
+        "name",
+        "uuid",
+        "discovery_timeout",
+        "load_timeout",
+        "interval",
+        "idle_debounce",
+        "autocast_delay",
+        "cooldown",
+        "recent_history",
+        "candidate_batch",
+    )
+    for output in values["outputs"]:
+        lines.append("[[outputs]]")
+        for key in output_keys:
+            value = output[key]
             rendered = _toml_string(value) if isinstance(value, str) else str(value).lower()
             lines.append(f"{key} = {rendered}")
         lines.append("")
@@ -466,7 +537,7 @@ def _atomic_write(path: Path, content: str) -> None:
 
 def save_settings(
     path: Path,
-    form_values: dict[str, dict[str, Any]],
+    form_values: dict[str, Any],
     *,
     expected_revision: int,
     environ: dict[str, str] | None = None,
@@ -480,7 +551,7 @@ def save_settings(
 
 def prepare_settings(
     path: Path,
-    form_values: dict[str, dict[str, Any]],
+    form_values: dict[str, Any],
     *,
     expected_revision: int,
     environ: dict[str, str] | None = None,

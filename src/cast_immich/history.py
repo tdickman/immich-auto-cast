@@ -27,47 +27,23 @@ class DisplayRecord:
 class HistoryState:
     rotation_enabled: bool = True
     records: tuple[DisplayRecord, ...] = ()
-    version: int = 1
+    version: int = 2
     autocast_enabled: bool = True
 
 
-class HistoryStore:
-    MAX_RECORDS = 10
-    VERSION = 1
-
-    def __init__(self, path: Path) -> None:
-        self._path = path
-        self._lock = threading.Lock()
+class OutputHistory:
+    def __init__(self, store: HistoryStore, output_id: str) -> None:
+        self._store = store
+        self.output_id = output_id
 
     def load(self) -> HistoryState:
-        with self._lock:
-            return self._load_unlocked()
+        return self._store._load_output(self.output_id)
 
     def set_rotation_enabled(self, enabled: bool) -> HistoryState:
-        if not isinstance(enabled, bool):
-            raise HistoryError("rotation_enabled must be a boolean")
-        with self._lock:
-            current = self._load_unlocked()
-            state = HistoryState(
-                rotation_enabled=enabled,
-                records=current.records,
-                autocast_enabled=current.autocast_enabled,
-            )
-            self._write_unlocked(state)
-            return state
+        return self._store._set_enabled(self.output_id, "rotation_enabled", enabled)
 
     def set_autocast_enabled(self, enabled: bool) -> HistoryState:
-        if not isinstance(enabled, bool):
-            raise HistoryError("autocast_enabled must be a boolean")
-        with self._lock:
-            current = self._load_unlocked()
-            state = HistoryState(
-                rotation_enabled=current.rotation_enabled,
-                records=current.records,
-                autocast_enabled=enabled,
-            )
-            self._write_unlocked(state)
-            return state
+        return self._store._set_enabled(self.output_id, "autocast_enabled", enabled)
 
     def record_display(
         self,
@@ -77,6 +53,82 @@ class HistoryStore:
         confirmed_at: datetime | None = None,
         event_id: str | None = None,
     ) -> DisplayRecord:
+        return self._store._record_display(
+            self.output_id,
+            load_id,
+            asset_id,
+            confirmed_at=confirmed_at,
+            event_id=event_id,
+        )
+
+
+class HistoryStore:
+    MAX_RECORDS = 10
+    VERSION = 2
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._lock = threading.Lock()
+
+    def for_output(self, output_id: str) -> OutputHistory:
+        if not output_id:
+            raise HistoryError("output_id must not be blank")
+        return OutputHistory(self, output_id)
+
+    # Compatibility wrappers for installations and callers that predate multi-output.
+    def load(self) -> HistoryState:
+        return self.for_output("default").load()
+
+    def set_rotation_enabled(self, enabled: bool) -> HistoryState:
+        return self.for_output("default").set_rotation_enabled(enabled)
+
+    def set_autocast_enabled(self, enabled: bool) -> HistoryState:
+        return self.for_output("default").set_autocast_enabled(enabled)
+
+    def record_display(
+        self,
+        load_id: str,
+        asset_id: str,
+        *,
+        confirmed_at: datetime | None = None,
+        event_id: str | None = None,
+    ) -> DisplayRecord:
+        return self.for_output("default").record_display(
+            load_id, asset_id, confirmed_at=confirmed_at, event_id=event_id
+        )
+
+    def _load_output(self, output_id: str) -> HistoryState:
+        with self._lock:
+            return self._load_all_unlocked().get(output_id, HistoryState())
+
+    def _set_enabled(self, output_id: str, field: str, enabled: bool) -> HistoryState:
+        if not isinstance(enabled, bool):
+            raise HistoryError(f"{field} must be a boolean")
+        with self._lock:
+            states = self._load_all_unlocked()
+            current = states.get(output_id, HistoryState())
+            state = HistoryState(
+                rotation_enabled=enabled
+                if field == "rotation_enabled"
+                else current.rotation_enabled,
+                records=current.records,
+                autocast_enabled=enabled
+                if field == "autocast_enabled"
+                else current.autocast_enabled,
+            )
+            states[output_id] = state
+            self._write_unlocked(states)
+            return state
+
+    def _record_display(
+        self,
+        output_id: str,
+        load_id: str,
+        asset_id: str,
+        *,
+        confirmed_at: datetime | None,
+        event_id: str | None,
+    ) -> DisplayRecord:
         if not load_id or not asset_id:
             raise HistoryError("display record IDs must not be blank")
         confirmation = datetime.now(UTC) if confirmed_at is None else confirmed_at
@@ -84,89 +136,97 @@ class HistoryStore:
             raise HistoryError("confirmed_at must include a timezone")
         confirmation = confirmation.astimezone(UTC)
         with self._lock:
-            current = self._load_unlocked()
+            states = self._load_all_unlocked()
+            current = states.get(output_id, HistoryState())
             for record in current.records:
                 if record.load_id == load_id:
                     return record
-            record = DisplayRecord(
-                event_id=event_id or str(uuid4()),
-                load_id=load_id,
-                asset_id=asset_id,
-                confirmed_at=confirmation,
-            )
+            record = DisplayRecord(event_id or str(uuid4()), load_id, asset_id, confirmation)
             records = sorted(
                 (*current.records, record), key=lambda item: item.confirmed_at, reverse=True
             )
-            state = HistoryState(
-                rotation_enabled=current.rotation_enabled,
-                records=tuple(records[: self.MAX_RECORDS]),
+            states[output_id] = HistoryState(
+                current.rotation_enabled,
+                tuple(records[: self.MAX_RECORDS]),
                 autocast_enabled=current.autocast_enabled,
             )
-            self._write_unlocked(state)
+            self._write_unlocked(states)
             return record
 
-    def _load_unlocked(self) -> HistoryState:
+    def _load_all_unlocked(self) -> dict[str, HistoryState]:
         if not self._path.exists():
-            return HistoryState()
+            return {}
         try:
             raw = json.loads(self._path.read_text(encoding="utf-8"))
-            if not isinstance(raw, dict) or raw.get("version") != self.VERSION:
+            if not isinstance(raw, dict):
+                raise ValueError("invalid document")
+            version = raw.get("version")
+            if version == 1:
+                return {"default": self._parse_state(raw)}
+            if version != self.VERSION or not isinstance(raw.get("outputs"), dict):
                 raise ValueError("unsupported version")
-            enabled = raw.get("rotation_enabled")
-            autocast_enabled = raw.get("autocast_enabled", True)
-            records_data = raw.get("records")
-            if (
-                not isinstance(enabled, bool)
-                or not isinstance(autocast_enabled, bool)
-                or not isinstance(records_data, list)
-            ):
-                raise ValueError("invalid state fields")
-            records = tuple(self._parse_record(item) for item in records_data)
-            if len(records) > self.MAX_RECORDS:
-                raise ValueError("too many display records")
-            if len({record.load_id for record in records}) != len(records):
-                raise ValueError("duplicate load IDs")
-            if tuple(sorted(records, key=lambda item: item.confirmed_at, reverse=True)) != records:
-                raise ValueError("display records are not newest first")
-            return HistoryState(
-                rotation_enabled=enabled,
-                records=records,
-                autocast_enabled=autocast_enabled,
-            )
+            return {
+                output_id: self._parse_state(value)
+                for output_id, value in raw["outputs"].items()
+                if isinstance(output_id, str) and output_id
+            }
         except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError):
             raise HistoryError("cannot read history state") from None
 
-    def _parse_record(self, value: Any) -> DisplayRecord:
+    def _parse_state(self, raw: Any) -> HistoryState:
+        if not isinstance(raw, dict):
+            raise ValueError("invalid state")
+        enabled = raw.get("rotation_enabled")
+        autocast_enabled = raw.get("autocast_enabled", True)
+        records_data = raw.get("records")
+        if (
+            not isinstance(enabled, bool)
+            or not isinstance(autocast_enabled, bool)
+            or not isinstance(records_data, list)
+        ):
+            raise ValueError("invalid state fields")
+        records = tuple(self._parse_record(item) for item in records_data)
+        if len(records) > self.MAX_RECORDS or len({item.load_id for item in records}) != len(
+            records
+        ):
+            raise ValueError("invalid display records")
+        if tuple(sorted(records, key=lambda item: item.confirmed_at, reverse=True)) != records:
+            raise ValueError("display records are not newest first")
+        return HistoryState(enabled, records, autocast_enabled=autocast_enabled)
+
+    @staticmethod
+    def _parse_record(value: Any) -> DisplayRecord:
         if not isinstance(value, dict):
             raise ValueError("invalid display record")
-        event_id = value["event_id"]
-        load_id = value["load_id"]
-        asset_id = value["asset_id"]
-        confirmed_value = value["confirmed_at"]
-        record_values = (event_id, load_id, asset_id, confirmed_value)
-        if not all(isinstance(item, str) and item for item in record_values):
+        values = (value["event_id"], value["load_id"], value["asset_id"], value["confirmed_at"])
+        if not all(isinstance(item, str) and item for item in values):
             raise ValueError("invalid display record")
-        confirmed_at = datetime.fromisoformat(confirmed_value)
+        confirmed_at = datetime.fromisoformat(values[3])
         if confirmed_at.tzinfo is None or confirmed_at.utcoffset() is None:
             raise ValueError("confirmation time has no timezone")
-        return DisplayRecord(event_id, load_id, asset_id, confirmed_at.astimezone(UTC))
+        return DisplayRecord(values[0], values[1], values[2], confirmed_at.astimezone(UTC))
 
-    def _write_unlocked(self, state: HistoryState) -> None:
+    def _write_unlocked(self, states: dict[str, HistoryState]) -> None:
         document = {
             "version": self.VERSION,
-            "rotation_enabled": state.rotation_enabled,
-            "autocast_enabled": state.autocast_enabled,
-            "records": [
-                {
-                    "event_id": record.event_id,
-                    "load_id": record.load_id,
-                    "asset_id": record.asset_id,
-                    "confirmed_at": record.confirmed_at.astimezone(UTC)
-                    .isoformat()
-                    .replace("+00:00", "Z"),
+            "outputs": {
+                output_id: {
+                    "rotation_enabled": state.rotation_enabled,
+                    "autocast_enabled": state.autocast_enabled,
+                    "records": [
+                        {
+                            "event_id": record.event_id,
+                            "load_id": record.load_id,
+                            "asset_id": record.asset_id,
+                            "confirmed_at": record.confirmed_at.astimezone(UTC)
+                            .isoformat()
+                            .replace("+00:00", "Z"),
+                        }
+                        for record in state.records
+                    ],
                 }
-                for record in state.records
-            ],
+                for output_id, state in states.items()
+            },
         }
         temporary: Path | None = None
         try:

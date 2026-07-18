@@ -106,8 +106,8 @@ def test_editable_settings_round_trip_every_value_and_mask_key(tmp_path: Path) -
     form["immich"]["api_key"] = "new-origin-secret"
     form["immich"]["request_timeout"] = 7.5
     form["immich"]["retry_attempts"] = 4
-    form["chromecast"]["discovery_timeout"] = 8.5
-    form["chromecast"]["load_timeout"] = 9.5
+    form["outputs"][0]["discovery_timeout"] = 8.5
+    form["outputs"][0]["load_timeout"] = 9.5
     form["relay"].update(
         bind_host="127.0.0.1",
         port=9876,
@@ -116,7 +116,7 @@ def test_editable_settings_round_trip_every_value_and_mask_key(tmp_path: Path) -
         max_response_bytes=123456,
         max_concurrent=2,
     )
-    form["rotation"].update(
+    form["outputs"][0].update(
         interval=45.0,
         idle_debounce=2.0,
         cooldown=12.0,
@@ -133,6 +133,8 @@ def test_editable_settings_round_trip_every_value_and_mask_key(tmp_path: Path) -
     assert reloaded.settings.immich.url == "https://new.example"
     assert reloaded.settings.immich.api_key == "new-origin-secret"
     assert reloaded.settings.service.log_level == "DEBUG"
+    assert "[[outputs]]" in path.read_text(encoding="utf-8")
+    assert "[chromecast]" not in path.read_text(encoding="utf-8")
     assert path.stat().st_mode & 0o777 == 0o600
 
 
@@ -184,7 +186,7 @@ def test_invalid_existing_config_never_reuses_its_stored_key(tmp_path: Path) -> 
     )
     candidate = default_form_values()
     candidate["immich"]["url"] = "https://new.example"
-    candidate["chromecast"]["uuid"] = "12345678-1234-4234-8234-123456789abc"
+    candidate["outputs"][0]["uuid"] = "12345678-1234-4234-8234-123456789abc"
     candidate["relay"]["advertised_host"] = "192.168.1.5"
 
     with pytest.raises(ConfigError, match=r"immich\.api_key"):
@@ -200,7 +202,7 @@ def test_setup_identity_path_cannot_escape_through_symlink(tmp_path: Path) -> No
     (tmp_path / "escape").symlink_to(outside, target_is_directory=True)
     candidate = default_form_values()
     candidate["immich"].update(url="https://photos.example", api_key="new-secret")
-    candidate["chromecast"]["uuid"] = "12345678-1234-4234-8234-123456789abc"
+    candidate["outputs"][0]["uuid"] = "12345678-1234-4234-8234-123456789abc"
     candidate["relay"]["advertised_host"] = "192.168.1.5"
     candidate["service"]["installation_id_file"] = "escape/identity"
 
@@ -290,3 +292,40 @@ def test_rollback_never_overwrites_a_newer_external_write(tmp_path: Path) -> Non
         restore_settings(candidate)
 
     assert path.read_text(encoding="utf-8").endswith("# external revision\n")
+
+
+def test_legacy_config_loads_as_default_output_without_rewrite(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    original = config_text()
+    path.write_text(original, encoding="utf-8")
+
+    document = load_editable_settings(path, {})
+
+    assert document.settings.outputs[0].id == "default"
+    assert document.settings.outputs[0].name == "Chromecast"
+    assert document.form_values["outputs"][0]["uuid"] == "12345678-1234-4234-8234-123456789abc"
+    assert path.read_text(encoding="utf-8") == original
+
+
+def test_rejects_mixed_duplicate_and_invalid_outputs(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    base = (
+        config_text()
+        .replace(
+            '[chromecast]\nuuid = "12345678-1234-4234-8234-123456789abc"\n',
+            '[[outputs]]\nid = "living-room"\nname = "Living Room"\n'
+            'uuid = "12345678-1234-4234-8234-123456789abc"\n',
+        )
+        .replace("[rotation]\ninterval = 30\n", "")
+    )
+    path.write_text(base + "\n[chromecast]\nuuid = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'\n")
+    with pytest.raises(ConfigError, match="cannot mix"):
+        load_settings(path, {})
+
+    path.write_text(base + base[base.index("[[outputs]]") : base.index("[relay]")])
+    with pytest.raises(ConfigError, match="unique"):
+        load_settings(path, {})
+
+    path.write_text(base.replace('id = "living-room"', 'id = "not/a/path"'))
+    with pytest.raises(ConfigError, match="URL-safe"):
+        load_settings(path, {})

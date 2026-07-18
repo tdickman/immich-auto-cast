@@ -176,6 +176,7 @@ class Coordinator:
         load_timeout: float,
         *,
         history: HistoryPersistence | None = None,
+        output_id: str | None = None,
     ) -> None:
         self.queue = queue
         self.state = State.UNAVAILABLE
@@ -184,6 +185,7 @@ class Coordinator:
         self._cast = cast
         self._settings = settings
         self._installation_id = str(installation_id)
+        self._output_id = output_id
         self._load_timeout = load_timeout
         self._history = history
         self._history_loaded = history is None
@@ -785,6 +787,8 @@ class Coordinator:
             "contentUrl": prepared.url,
             "assetId": str(prepared.asset.id),
         }
+        if self._output_id is not None:
+            metadata["outputId"] = self._output_id
         self._expected = (load_id, prepared.url, prepared.asset.id)
         self._prepared = None
         self.state = State.LOAD_PENDING
@@ -822,6 +826,11 @@ class Coordinator:
             or data.get("contentUrl") != media.content_id
         ):
             return None
+        metadata_output = data.get("outputId")
+        if self._output_id is not None and metadata_output != self._output_id:
+            # The original single-output metadata had no output marker.
+            if self._output_id != "default" or metadata_output is not None:
+                return None
         try:
             asset_id = UUID(str(data["assetId"]))
         except (KeyError, ValueError):

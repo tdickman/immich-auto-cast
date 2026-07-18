@@ -103,13 +103,23 @@ class CorruptHistory(History):
 
 def make_coordinator(
     history: History | None = None,
+    *,
+    output_id: str | None = None,
 ) -> tuple[Coordinator, asyncio.Queue[Any], Selector, Cast]:
     queue: asyncio.Queue[Any] = asyncio.Queue()
     selector = Selector()
     cast = Cast()
     settings = RotationSettings(0.02, 0.01, 0.02, 5, 10)
     coordinator = Coordinator(
-        queue, selector, Relay(), cast, settings, INSTALLATION_ID, 0.02, history=history
+        queue,
+        selector,
+        Relay(),
+        cast,
+        settings,
+        INSTALLATION_ID,
+        0.02,
+        history=history,
+        output_id=output_id,
     )
     return coordinator, queue, selector, cast
 
@@ -197,6 +207,27 @@ async def test_stable_idle_sends_exactly_one_load_and_confirms_ownership() -> No
     )
     assert coordinator.snapshot.state is State.OWNED
     assert len(cast.loads) == 1
+    await coordinator.close()
+
+
+@pytest.mark.asyncio
+async def test_output_ownership_does_not_adopt_another_outputs_session() -> None:
+    coordinator, queue, _selector, cast = make_coordinator(output_id="living-room")
+    await drive_idle_to_load(coordinator, queue)
+    _generation, url, _mime, metadata = cast.loads[0]
+
+    assert metadata["outputId"] == "living-room"
+    await coordinator.handle(
+        event(EventKind.RECEIVER, receiver=ReceiverStatus("CC1AD845", "session"))
+    )
+    await coordinator.handle(
+        event(
+            EventKind.MEDIA,
+            media=MediaStatus("PLAYING", url, 3, dict(metadata, outputId="office")),
+        )
+    )
+
+    assert coordinator.snapshot.state is State.PROTECTED
     await coordinator.close()
 
 

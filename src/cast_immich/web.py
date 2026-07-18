@@ -19,7 +19,7 @@ from .coordinator import Command, CommandResult, CoordinatorSnapshot
 from .history import DisplayRecord, HistoryError
 from .immich import AssetUnavailable, ImmichError, PhotoSource, SourceKind
 from .relay import ALLOWED_IMAGE_TYPES
-from .runtime import ApplyStatus, ConfigSnapshot, RuntimeSnapshot, RuntimeSupervisor
+from .runtime import ApplyStatus, ConfigSnapshot, OutputSnapshot, RuntimeSnapshot, RuntimeSupervisor
 
 CLIENT_MAX_SIZE = 64 * 1024
 MUTATION_HEADER = "X-Cast-Immich-Request"
@@ -149,6 +149,9 @@ def create_management_app(
         )
 
     async def control(request: web.Request) -> web.Response:
+        output_id = _request_output_id(request, supervisor.snapshot)
+        if output_id is None:
+            raise web.HTTPNotFound
         failure = _mutation_failure(request, token, allowed_hosts)
         if failure is not None:
             return failure
@@ -162,7 +165,7 @@ def create_management_app(
             command = Command(request.match_info["command"])
         except ValueError:
             raise web.HTTPNotFound from None
-        outcome = await supervisor.command(command, request_id)
+        outcome = await supervisor.command(output_id, command, request_id)
         code = 503 if outcome is CommandResult.FAILED else 200
         return web.json_response(
             {
@@ -175,6 +178,9 @@ def create_management_app(
         )
 
     async def reconnect(request: web.Request) -> web.Response:
+        output_id = _request_output_id(request, supervisor.snapshot)
+        if output_id is None:
+            raise web.HTTPNotFound
         failure = _mutation_failure(request, token, allowed_hosts)
         if failure is not None:
             return failure
@@ -183,18 +189,23 @@ def create_management_app(
             return body
         if body:
             return _error(400, "invalid_request", "request body must be empty")
-        available = await supervisor.reconnect()
+        available = await supervisor.reconnect(output_id)
         return web.json_response(
             {"outcome": "accepted" if available else "unavailable"},
             status=202 if available else 503,
         )
 
-    async def history(_request: web.Request) -> web.Response:
+    async def history(request: web.Request) -> web.Response:
+        snapshot = supervisor.snapshot
+        output_id = _request_output_id(request, snapshot)
+        if output_id is None:
+            raise web.HTTPNotFound
         try:
-            state = await supervisor.history_snapshot()
+            state = await supervisor.history_snapshot(output_id)
         except HistoryError:
             return _error(503, "history_unavailable", "history is unavailable")
-        coordinator = supervisor.snapshot.coordinator
+        output = next(item for item in snapshot.outputs if item.id == output_id)
+        coordinator = output.coordinator
         upcoming = coordinator.upcoming_assets if coordinator is not None else ()
         current_asset = coordinator.current_asset if coordinator is not None else None
         current_record = (
@@ -213,14 +224,16 @@ def create_management_app(
             {
                 "rotation_enabled": state.rotation_enabled,
                 "current": (
-                    _current_json(current_asset, current_record)
+                    _current_json(output_id, current_asset, current_record)
                     if current_asset is not None
                     else None
                 ),
                 "records": [
-                    _record_json(record) for record in state.records if record is not current_record
+                    _record_json(output_id, record)
+                    for record in state.records
+                    if record is not current_record
                 ],
-                "upcoming": [_upcoming_json(asset_id) for asset_id in upcoming],
+                "upcoming": [_upcoming_json(output_id, asset_id) for asset_id in upcoming],
             }
         )
 
@@ -229,19 +242,11 @@ def create_management_app(
             items = await supervisor.albums()
         except ImmichError:
             return _error(502, "albums_upstream_error", "albums are unavailable")
-        coordinator = supervisor.snapshot.coordinator
         return web.json_response(
-            {
-                "selected_album_id": (
-                    str(coordinator.selected_album)
-                    if coordinator is not None and coordinator.selected_album is not None
-                    else None
-                ),
-                "albums": [
-                    {"id": str(album.id), "name": album.name, "asset_count": album.asset_count}
-                    for album in items
-                ],
-            }
+            [
+                {"id": str(album.id), "name": album.name, "asset_count": album.asset_count}
+                for album in items
+            ]
         )
 
     async def people(_request: web.Request) -> web.Response:
@@ -249,19 +254,12 @@ def create_management_app(
             items = await supervisor.people()
         except ImmichError:
             return _error(502, "people_upstream_error", "people are unavailable")
-        coordinator = supervisor.snapshot.coordinator
-        return web.json_response(
-            {
-                "selected_person_id": (
-                    str(coordinator.selected_person)
-                    if coordinator is not None and coordinator.selected_person is not None
-                    else None
-                ),
-                "people": [{"id": str(person.id), "name": person.name} for person in items],
-            }
-        )
+        return web.json_response([{"id": str(person.id), "name": person.name} for person in items])
 
     async def source(request: web.Request) -> web.Response:
+        output_id = _request_output_id(request, supervisor.snapshot)
+        if output_id is None:
+            raise web.HTTPNotFound
         failure = _mutation_failure(request, token, allowed_hosts)
         if failure is not None:
             return failure
@@ -292,7 +290,8 @@ def create_management_app(
         selected = PhotoSource(kind, source_id, query)
         try:
             applied = await supervisor.select_source(
-                source_id if legacy_album_request and kind is SourceKind.ALBUM else selected
+                output_id,
+                source_id if legacy_album_request and kind is SourceKind.ALBUM else selected,
             )
         except ImmichError:
             return _error(502, "source_upstream_error", "photo source is unavailable")
@@ -303,6 +302,9 @@ def create_management_app(
         return web.json_response({"outcome": "applied", "source": _source_json(selected)})
 
     async def seek(request: web.Request) -> web.Response:
+        output_id = _request_output_id(request, supervisor.snapshot)
+        if output_id is None:
+            raise web.HTTPNotFound
         failure = _mutation_failure(request, token, allowed_hosts)
         if failure is not None:
             return failure
@@ -321,13 +323,16 @@ def create_management_app(
             or not target_id.strip()
         ):
             return _error(400, "invalid_request", "request_id and target are required")
-        outcome = await supervisor.seek(target_kind, target_id, request_id)
+        outcome = await supervisor.seek(output_id, target_kind, target_id, request_id)
         code = 503 if outcome is CommandResult.FAILED else 200
         return web.json_response({"outcome": outcome.value, "request_id": request_id}, status=code)
 
     async def thumbnail(request: web.Request) -> web.Response:
+        output_id = _request_output_id(request, supervisor.snapshot)
+        if output_id is None:
+            raise web.HTTPNotFound
         try:
-            preview = await supervisor.thumbnail(request.match_info["event_id"])
+            preview = await supervisor.thumbnail(output_id, request.match_info["event_id"])
         except AssetUnavailable:
             return _error(404, "thumbnail_unavailable", "thumbnail is unavailable")
         except HistoryError:
@@ -339,9 +344,12 @@ def create_management_app(
         return web.Response(body=preview.body, content_type=preview.content_type)
 
     async def upcoming_thumbnail(request: web.Request) -> web.Response:
+        output_id = _request_output_id(request, supervisor.snapshot)
+        if output_id is None:
+            raise web.HTTPNotFound
         try:
             asset_id = UUID(request.match_info["asset_id"])
-            preview = await supervisor.upcoming_thumbnail(asset_id)
+            preview = await supervisor.upcoming_thumbnail(output_id, asset_id)
         except (ValueError, AssetUnavailable):
             return _error(404, "thumbnail_unavailable", "thumbnail is unavailable")
         except ImmichError:
@@ -351,9 +359,12 @@ def create_management_app(
         return web.Response(body=preview.body, content_type=preview.content_type)
 
     async def current_thumbnail(request: web.Request) -> web.Response:
+        output_id = _request_output_id(request, supervisor.snapshot)
+        if output_id is None:
+            raise web.HTTPNotFound
         try:
             asset_id = UUID(request.match_info["asset_id"])
-            preview = await supervisor.current_thumbnail(asset_id)
+            preview = await supervisor.current_thumbnail(output_id, asset_id)
         except (ValueError, AssetUnavailable):
             return _error(404, "thumbnail_unavailable", "thumbnail is unavailable")
         except ImmichError:
@@ -369,6 +380,15 @@ def create_management_app(
     app.router.add_get("/api/config", config)
     app.router.add_put("/api/config", save)
     app.router.add_post("/api/discovery", discovery)
+    app.router.add_post("/api/outputs/{output_id}/controls/{command}", control)
+    app.router.add_post("/api/outputs/{output_id}/reconnect", reconnect)
+    app.router.add_post("/api/outputs/{output_id}/source", source)
+    app.router.add_post("/api/outputs/{output_id}/seek", seek)
+    app.router.add_get("/api/outputs/{output_id}/history", history)
+    app.router.add_get("/api/outputs/{output_id}/history/{event_id}/thumbnail", thumbnail)
+    app.router.add_get("/api/outputs/{output_id}/upcoming/{asset_id}/thumbnail", upcoming_thumbnail)
+    app.router.add_get("/api/outputs/{output_id}/current/{asset_id}/thumbnail", current_thumbnail)
+    # Singleton aliases keep existing dashboards operational during migration.
     app.router.add_post("/api/controls/{command}", control)
     app.router.add_post("/api/reconnect", reconnect)
     app.router.add_get("/api/albums", albums)
@@ -491,32 +511,47 @@ async def _json_object(request: web.Request) -> dict[str, Any] | web.Response:
 
 
 def _runtime_json(snapshot: RuntimeSnapshot) -> dict[str, Any]:
-    coordinator = snapshot.coordinator
-    active = snapshot.mode.value == "active"
-    owned = active and coordinator is not None and coordinator.state.value == "owned"
-    rotation_enabled = coordinator.rotation_enabled if coordinator is not None else True
-    return {
+    payload: dict[str, Any] = {
         "mode": snapshot.mode.value,
         "revision": snapshot.revision,
         "generation": snapshot.generation,
-        "coordinator": _coordinator_json(coordinator),
         "error": snapshot.error,
-        "autocast_enabled": coordinator.autocast_enabled if coordinator is not None else True,
+        "outputs": [
+            _output_json(output, snapshot.mode.value == "active") for output in snapshot.outputs
+        ],
+    }
+    if len(snapshot.outputs) == 1:
+        payload.update(_legacy_output_json(snapshot.outputs[0], snapshot.mode.value == "active"))
+    return payload
+
+
+def _output_json(output: OutputSnapshot, active: bool) -> dict[str, Any]:
+    return {
+        "id": output.id,
+        "name": output.name,
+        "receiver": {"uuid": str(output.receiver_uuid)},
+        **_legacy_output_json(output, active),
+    }
+
+
+def _legacy_output_json(output: OutputSnapshot, active: bool) -> dict[str, Any]:
+    coordinator = output.coordinator
+    owned = active and coordinator.state.value == "owned"
+    rotation_enabled = coordinator.rotation_enabled
+    return {
+        "coordinator": _coordinator_json(coordinator),
+        "autocast_enabled": coordinator.autocast_enabled,
         "autocast_remaining_seconds": (
             max(0.0, coordinator.autocast_deadline - time.monotonic())
-            if coordinator is not None and coordinator.autocast_deadline is not None
+            if coordinator.autocast_deadline is not None
             else None
         ),
-        "source": (
-            _source_json(
-                PhotoSource(
-                    coordinator.source_kind,
-                    coordinator.selected_album or coordinator.selected_person,
-                    coordinator.search_query,
-                )
+        "source": _source_json(
+            PhotoSource(
+                coordinator.source_kind,
+                coordinator.selected_album or coordinator.selected_person,
+                coordinator.search_query,
             )
-            if coordinator is not None
-            else _source_json(PhotoSource())
         ),
         "available_actions": {
             "pause": active and rotation_enabled,
@@ -524,10 +559,8 @@ def _runtime_json(snapshot: RuntimeSnapshot) -> dict[str, Any]:
             "next": owned,
             "stop": owned,
             "reconnect": active,
-            "autocast_enable": (
-                active and coordinator is not None and not coordinator.autocast_enabled
-            ),
-            "autocast_disable": active and coordinator is not None and coordinator.autocast_enabled,
+            "autocast_enable": (active and not coordinator.autocast_enabled),
+            "autocast_disable": active and coordinator.autocast_enabled,
         },
     }
 
@@ -571,6 +604,14 @@ def _safe_draft(values: dict[str, Any]) -> dict[str, Any]:
     schema = default_form_values()
     for section, fields in schema.items():
         submitted = values.get(section)
+        if section == "outputs" and isinstance(submitted, list):
+            allowed = set(fields[0])
+            draft[section] = [
+                {key: copy.deepcopy(value[key]) for key in allowed if key in value}
+                for value in submitted
+                if isinstance(value, dict)
+            ]
+            continue
         if not isinstance(submitted, dict):
             continue
         draft[section] = {key: copy.deepcopy(submitted[key]) for key in fields if key in submitted}
@@ -578,30 +619,39 @@ def _safe_draft(values: dict[str, Any]) -> dict[str, Any]:
     return draft
 
 
-def _record_json(record: DisplayRecord) -> dict[str, str]:
+def _record_json(output_id: str, record: DisplayRecord) -> dict[str, str]:
     return {
         "event_id": record.event_id,
         "asset_id": record.asset_id,
         "confirmed_at": _isoformat(record.confirmed_at),
-        "thumbnail_url": f"/api/history/{record.event_id}/thumbnail",
+        "thumbnail_url": f"/api/outputs/{output_id}/history/{record.event_id}/thumbnail",
     }
 
 
-def _upcoming_json(asset_id: UUID) -> dict[str, str]:
+def _upcoming_json(output_id: str, asset_id: UUID) -> dict[str, str]:
     value = str(asset_id)
     return {
         "asset_id": value,
-        "thumbnail_url": f"/api/upcoming/{value}/thumbnail",
+        "thumbnail_url": f"/api/outputs/{output_id}/upcoming/{value}/thumbnail",
     }
 
 
-def _current_json(asset_id: UUID, record: DisplayRecord | None) -> dict[str, str | None]:
+def _current_json(
+    output_id: str, asset_id: UUID, record: DisplayRecord | None
+) -> dict[str, str | None]:
     value = str(asset_id)
     return {
         "asset_id": value,
         "confirmed_at": _isoformat(record.confirmed_at) if record is not None else None,
-        "thumbnail_url": f"/api/current/{value}/thumbnail",
+        "thumbnail_url": f"/api/outputs/{output_id}/current/{value}/thumbnail",
     }
+
+
+def _request_output_id(request: web.Request, snapshot: RuntimeSnapshot) -> str | None:
+    requested = request.match_info.get("output_id")
+    if requested is not None:
+        return requested if any(output.id == requested for output in snapshot.outputs) else None
+    return snapshot.outputs[0].id if len(snapshot.outputs) == 1 else None
 
 
 def _isoformat(value: datetime) -> str:
