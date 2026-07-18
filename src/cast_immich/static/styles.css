@@ -76,7 +76,6 @@ h2 { margin: 0; font-size: 2rem; letter-spacing: -.025em; }
 
 .playback-gallery { display: grid; gap: 1.25rem; margin-top: 1.25rem; }
 .now-panel { padding: clamp(1.5rem, 4vw, 3rem); overflow: hidden; border-radius: 18px; color: #f7f6f2; background: #242d29; }
-.now-panel > .eyebrow { margin-bottom: .55rem; color: #ff9b80; }
 .now-panel h2 { font-size: clamp(2.3rem, 5vw, 4.5rem); }
 .now-content { margin-top: 1.5rem; }
 .current-record { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(220px, .75fr); gap: clamp(1.25rem, 4vw, 3rem); align-items: end; }
@@ -92,7 +91,6 @@ h2 { margin: 0; font-size: 2rem; letter-spacing: -.025em; }
 .upcoming-panel { border-top: 3px solid var(--accent); }
 .history-panel { background: #fafaf7; }
 .section-heading { display: flex; align-items: center; justify-content: space-between; }
-.section-heading .eyebrow { margin-bottom: .45rem; }
 .section-note { margin: .6rem 0 0; color: var(--muted); font-size: .78rem; }
 .history-count { min-width: 2rem; padding: .3rem .55rem; border-radius: 999px; color: var(--muted); background: var(--bg); text-align: center; font: .68rem var(--mono); }
 .contact-sheet { display: flex; gap: .75rem; overflow-x: auto; padding: 1.25rem 0 .25rem; scrollbar-width: thin; scrollbar-color: #a7aca8 transparent; scroll-snap-type: x proximity; }

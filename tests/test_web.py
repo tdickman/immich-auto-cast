@@ -231,6 +231,9 @@ async def test_dashboard_assets_expose_complete_operator_interface(
     assert "Up next /" not in javascript
     assert 'class="now-panel"' in html
     assert "Previously shown" in html
+    assert "On screen" not in html
+    assert "Coming up" not in html
+    assert "Recently on screen" not in html
     assert html.count("use its corner control to play from there") == 2
     assert 'id="current-count"' not in html
     assert "function immichPhotoUrl(assetId)" in javascript
