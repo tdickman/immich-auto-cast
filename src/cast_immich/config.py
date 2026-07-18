@@ -78,6 +78,9 @@ class RotationSettings:
     video_muted: bool = True
     show_web_qr: bool = False
     web_qr_size: int = 1
+    web_qr_position: str = "bottom-left"
+    web_qr_inset_x: int = 36
+    web_qr_inset_y: int = 36
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +159,9 @@ def default_form_values() -> dict[str, Any]:
                 "video_muted": True,
                 "show_web_qr": False,
                 "web_qr_size": 1,
+                "web_qr_position": "bottom-left",
+                "web_qr_inset_x": 36,
+                "web_qr_inset_y": 36,
             }
         ],
         "relay": {
@@ -352,6 +358,15 @@ def _parse_candidate(
         )
         if web_qr_size > 6:
             _fail(f"{section}.web_qr_size must be between 1 and 6")
+        web_qr_position = str(output.get("web_qr_position", "bottom-left"))
+        if web_qr_position not in {"top-left", "top-right", "bottom-left", "bottom-right"}:
+            _fail(f"{section}.web_qr_position must be a valid corner")
+        web_qr_insets: list[int] = []
+        for key, maximum in (("web_qr_inset_x", 640), ("web_qr_inset_y", 360)):
+            value = output.get(key, 36)
+            if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= maximum:
+                _fail(f"{section}.{key} must be between 0 and {maximum}")
+            web_qr_insets.append(value)
         outputs.append(
             OutputSettings(
                 output_id,
@@ -389,6 +404,9 @@ def _parse_candidate(
                     _boolean(output.get("video_muted", True), f"{section}.video_muted"),
                     _boolean(output.get("show_web_qr", False), f"{section}.show_web_qr"),
                     web_qr_size,
+                    web_qr_position,
+                    web_qr_insets[0],
+                    web_qr_insets[1],
                 ),
             )
         )
@@ -465,6 +483,9 @@ def _form_values(settings: Settings, path: Path) -> dict[str, Any]:
                 "video_muted": output.rotation.video_muted,
                 "show_web_qr": output.rotation.show_web_qr,
                 "web_qr_size": output.rotation.web_qr_size,
+                "web_qr_position": output.rotation.web_qr_position,
+                "web_qr_inset_x": output.rotation.web_qr_inset_x,
+                "web_qr_inset_y": output.rotation.web_qr_inset_y,
             }
             for output in settings.outputs
         ],
@@ -551,6 +572,9 @@ def _serialize_configuration(
         "video_muted",
         "show_web_qr",
         "web_qr_size",
+        "web_qr_position",
+        "web_qr_inset_x",
+        "web_qr_inset_y",
     )
     for output in values["outputs"]:
         lines.append("[[outputs]]")

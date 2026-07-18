@@ -81,11 +81,25 @@ class Relay(Protocol):
     async def mint(self, asset_id: UUID) -> tuple[str, str]: ...
 
     async def preload_media(
-        self, asset: Asset, *, show_web_qr: bool = False, web_qr_size: int = 1
+        self,
+        asset: Asset,
+        *,
+        show_web_qr: bool = False,
+        web_qr_size: int = 1,
+        web_qr_position: str = "bottom-left",
+        web_qr_inset_x: int = 36,
+        web_qr_inset_y: int = 36,
     ) -> None: ...
 
     async def mint_media(
-        self, asset: Asset, *, show_web_qr: bool = False, web_qr_size: int = 1
+        self,
+        asset: Asset,
+        *,
+        show_web_qr: bool = False,
+        web_qr_size: int = 1,
+        web_qr_position: str = "bottom-left",
+        web_qr_inset_x: int = 36,
+        web_qr_inset_y: int = 36,
     ) -> tuple[str, str]: ...
 
     def confirm(self, url: str) -> None: ...
@@ -992,7 +1006,12 @@ class Coordinator:
             if preload_media is not None:
                 if self._settings.show_web_qr:
                     await preload_media(
-                        asset, show_web_qr=True, web_qr_size=self._settings.web_qr_size
+                        asset,
+                        show_web_qr=True,
+                        web_qr_size=self._settings.web_qr_size,
+                        web_qr_position=self._settings.web_qr_position,
+                        web_qr_inset_x=self._settings.web_qr_inset_x,
+                        web_qr_inset_y=self._settings.web_qr_inset_y,
                     )
                 else:
                     await preload_media(asset)
@@ -1008,7 +1027,12 @@ class Coordinator:
         if mint_media is not None:
             if self._settings.show_web_qr:
                 url, content_type = await mint_media(
-                    asset, show_web_qr=True, web_qr_size=self._settings.web_qr_size
+                    asset,
+                    show_web_qr=True,
+                    web_qr_size=self._settings.web_qr_size,
+                    web_qr_position=self._settings.web_qr_position,
+                    web_qr_inset_x=self._settings.web_qr_inset_x,
+                    web_qr_inset_y=self._settings.web_qr_inset_y,
                 )
             else:
                 url, content_type = await mint_media(asset)

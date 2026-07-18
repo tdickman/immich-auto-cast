@@ -564,7 +564,7 @@ function setReceiverOptions(select, selectedUuid) {
 const outputNumberFields = new Set([
   "discovery_timeout", "load_timeout", "interval", "idle_debounce", "cooldown",
   "recent_history", "candidate_batch", "autocast_delay",
-  "video_max_duration", "web_qr_size",
+  "video_max_duration", "web_qr_size", "web_qr_inset_x", "web_qr_inset_y",
 ]);
 
 function outputField(labelText, field, value, options = {}) {
@@ -574,6 +574,13 @@ function outputField(labelText, field, value, options = {}) {
   if (field === "uuid") {
     control = document.createElement("select");
     setReceiverOptions(control, value);
+  } else if (field === "web_qr_position") {
+    control = document.createElement("select");
+    for (const [label, position] of [
+      ["Bottom left", "bottom-left"], ["Bottom right", "bottom-right"],
+      ["Top left", "top-left"], ["Top right", "top-right"],
+    ]) control.add(new Option(label, position));
+    control.value = value || "bottom-left";
   } else if (field === "video_muted") {
     control = document.createElement("input");
     control.type = "checkbox";
@@ -596,6 +603,75 @@ function outputField(labelText, field, value, options = {}) {
   control.dataset.outputField = field;
   label.append(control);
   return label;
+}
+
+function qrPlacementEditor(fields) {
+  const editor = document.createElement("div");
+  editor.className = "qr-placement-editor";
+  const heading = document.createElement("div");
+  heading.className = "qr-placement-heading";
+  const title = document.createElement("strong");
+  title.textContent = "QR placement preview";
+  const hint = document.createElement("span");
+  hint.textContent = "Drag the badge or enter exact 1280 x 720 canvas insets.";
+  heading.append(title, hint);
+  const preview = document.createElement("div");
+  preview.className = "qr-placement-preview";
+  preview.setAttribute("role", "img");
+  preview.setAttribute("aria-label", "Draggable QR placement preview");
+  const badge = document.createElement("div");
+  badge.className = "qr-placement-badge";
+  badge.textContent = "QR";
+  preview.append(badge);
+  editor.append(heading, preview);
+
+  const control = field => fields.querySelector(`[data-output-field="${field}"]`);
+  const enabled = control("show_web_qr");
+  const size = control("web_qr_size");
+  const position = control("web_qr_position");
+  const insetX = control("web_qr_inset_x");
+  const insetY = control("web_qr_inset_y");
+
+  const update = () => {
+    const qrSize = Math.min(6, Math.max(1, Number(size.value) || 1));
+    const x = Math.min(640, Math.max(0, Number(insetX.value) || 0));
+    const y = Math.min(360, Math.max(0, Number(insetY.value) || 0));
+    badge.hidden = !enabled.checked;
+    badge.style.width = `${qrSize * 3.4}%`;
+    badge.style.left = badge.style.right = badge.style.top = badge.style.bottom = "auto";
+    badge.style[position.value.endsWith("left") ? "left" : "right"] = `${x / 12.8}%`;
+    badge.style[position.value.startsWith("top") ? "top" : "bottom"] = `${y / 7.2}%`;
+  };
+  for (const item of [enabled, size, position, insetX, insetY]) item.addEventListener("input", update);
+
+  let pointerOffset = null;
+  badge.addEventListener("pointerdown", event => {
+    const bounds = badge.getBoundingClientRect();
+    pointerOffset = { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
+    badge.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  });
+  badge.addEventListener("pointermove", event => {
+    if (pointerOffset === null || !badge.hasPointerCapture(event.pointerId)) return;
+    const bounds = preview.getBoundingClientRect();
+    const badgeWidth = badge.offsetWidth / bounds.width * 1280;
+    const badgeHeight = badge.offsetHeight / bounds.height * 720;
+    const left = Math.min(1280 - badgeWidth, Math.max(0, (event.clientX - bounds.left - pointerOffset.x) / bounds.width * 1280));
+    const top = Math.min(720 - badgeHeight, Math.max(0, (event.clientY - bounds.top - pointerOffset.y) / bounds.height * 720));
+    const x = position.value.endsWith("left") ? left : 1280 - left - badgeWidth;
+    const y = position.value.startsWith("top") ? top : 720 - top - badgeHeight;
+    insetX.value = String(Math.round(Math.min(640, x)));
+    insetY.value = String(Math.round(Math.min(360, y)));
+    insetX.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const endDrag = event => {
+    pointerOffset = null;
+    if (badge.hasPointerCapture(event.pointerId)) badge.releasePointerCapture(event.pointerId);
+  };
+  badge.addEventListener("pointerup", endDrag);
+  badge.addEventListener("pointercancel", endDrag);
+  update();
+  return editor;
 }
 
 function makeOutputSettingsRow(output) {
@@ -635,7 +711,11 @@ function makeOutputSettingsRow(output) {
     outputField("Mute videos", "video_muted", output.video_muted),
     outputField("Show web interface QR code", "show_web_qr", output.show_web_qr),
     outputField("QR code size (1-6)", "web_qr_size", output.web_qr_size, { min: "1", max: "6", step: "1" }),
+    outputField("QR corner", "web_qr_position", output.web_qr_position),
+    outputField("Horizontal inset", "web_qr_inset_x", output.web_qr_inset_x, { min: "0", max: "640", step: "1" }),
+    outputField("Vertical inset", "web_qr_inset_y", output.web_qr_inset_y, { min: "0", max: "360", step: "1" }),
   );
+  fields.append(qrPlacementEditor(fields));
   advanced.append(summary, fields);
   row.append(heading, basics, advanced);
   return row;
@@ -675,6 +755,9 @@ function outputFromTemplate(template, { id, name, uuid }) {
     video_muted: template.video_muted ?? true,
     show_web_qr: template.show_web_qr ?? false,
     web_qr_size: template.web_qr_size ?? 1,
+    web_qr_position: template.web_qr_position ?? "bottom-left",
+    web_qr_inset_x: template.web_qr_inset_x ?? 36,
+    web_qr_inset_y: template.web_qr_inset_y ?? 36,
   };
 }
 

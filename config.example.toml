@@ -20,6 +20,9 @@ video_max_duration = 30.0
 video_muted = true
 show_web_qr = false
 web_qr_size = 1
+web_qr_position = "bottom-left"
+web_qr_inset_x = 36
+web_qr_inset_y = 36
 
 [relay]
 bind_host = "0.0.0.0"

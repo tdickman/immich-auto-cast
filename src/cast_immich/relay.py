@@ -61,6 +61,17 @@ class Capability:
     pinned: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class QrPlacement:
+    size: int
+    position: str
+    inset_x: int
+    inset_y: int
+
+
+DEFAULT_QR_PLACEMENT = QrPlacement(1, "bottom-left", 36, 36)
+
+
 class ImageRelay:
     def __init__(
         self,
@@ -76,8 +87,10 @@ class ImageRelay:
         self._clock = clock
         self._max_tokens = max_tokens
         self._tokens: OrderedDict[str, Capability] = OrderedDict()
-        self._previews: OrderedDict[tuple[UUID, int], Preview] = OrderedDict()
-        self._preview_tasks: dict[tuple[UUID, int], asyncio.Task[Preview]] = {}
+        self._previews: OrderedDict[tuple[UUID, QrPlacement | None], Preview] = OrderedDict()
+        self._preview_tasks: dict[
+            tuple[UUID, QrPlacement | None], asyncio.Task[Preview]
+        ] = {}
         self._dashboard_url = dashboard_url
         self._web_qrs: dict[int, Image.Image] = {}
         self._semaphore = asyncio.Semaphore(settings.max_concurrent)
@@ -120,6 +133,9 @@ class ImageRelay:
         *,
         show_web_qr: bool = False,
         web_qr_size: int = 1,
+        web_qr_position: str = "bottom-left",
+        web_qr_inset_x: int = 36,
+        web_qr_inset_y: int = 36,
     ) -> None:
         """Fetch and normalize an image before the receiver needs it."""
         if isinstance(asset, Asset) and asset.media_type is MediaType.VIDEO:
@@ -128,12 +144,29 @@ class ImageRelay:
             asset.id if isinstance(asset, Asset) else asset,
             show_web_qr=show_web_qr,
             web_qr_size=web_qr_size,
+            web_qr_position=web_qr_position,
+            web_qr_inset_x=web_qr_inset_x,
+            web_qr_inset_y=web_qr_inset_y,
         )
 
     async def preload_media(
-        self, asset: Asset, *, show_web_qr: bool = False, web_qr_size: int = 1
+        self,
+        asset: Asset,
+        *,
+        show_web_qr: bool = False,
+        web_qr_size: int = 1,
+        web_qr_position: str = "bottom-left",
+        web_qr_inset_x: int = 36,
+        web_qr_inset_y: int = 36,
     ) -> None:
-        await self.preload(asset, show_web_qr=show_web_qr, web_qr_size=web_qr_size)
+        await self.preload(
+            asset,
+            show_web_qr=show_web_qr,
+            web_qr_size=web_qr_size,
+            web_qr_position=web_qr_position,
+            web_qr_inset_x=web_qr_inset_x,
+            web_qr_inset_y=web_qr_inset_y,
+        )
 
     async def mint(
         self,
@@ -141,6 +174,9 @@ class ImageRelay:
         *,
         show_web_qr: bool = False,
         web_qr_size: int = 1,
+        web_qr_position: str = "bottom-left",
+        web_qr_inset_x: int = 36,
+        web_qr_inset_y: int = 36,
     ) -> tuple[str, str]:
         if self._closed:
             raise AssetUnavailable("media relay is closed")
@@ -148,7 +184,12 @@ class ImageRelay:
         media = asset if isinstance(asset, Asset) else Asset(asset)
         preview = (
             await self._get_preview(
-                media.id, show_web_qr=show_web_qr, web_qr_size=web_qr_size
+                media.id,
+                show_web_qr=show_web_qr,
+                web_qr_size=web_qr_size,
+                web_qr_position=web_qr_position,
+                web_qr_inset_x=web_qr_inset_x,
+                web_qr_inset_y=web_qr_inset_y,
             )
             if media.media_type is MediaType.IMAGE
             else None
@@ -168,19 +209,42 @@ class ImageRelay:
         return f"{self._settings.advertised_base_url}/{path}/{token}", content_type
 
     async def mint_media(
-        self, asset: Asset, *, show_web_qr: bool = False, web_qr_size: int = 1
+        self,
+        asset: Asset,
+        *,
+        show_web_qr: bool = False,
+        web_qr_size: int = 1,
+        web_qr_position: str = "bottom-left",
+        web_qr_inset_x: int = 36,
+        web_qr_inset_y: int = 36,
     ) -> tuple[str, str]:
         return await self.mint(
-            asset, show_web_qr=show_web_qr, web_qr_size=web_qr_size
+            asset,
+            show_web_qr=show_web_qr,
+            web_qr_size=web_qr_size,
+            web_qr_position=web_qr_position,
+            web_qr_inset_x=web_qr_inset_x,
+            web_qr_inset_y=web_qr_inset_y,
         )
 
     async def _get_preview(
-        self, asset_id: UUID, *, show_web_qr: bool = False, web_qr_size: int = 1
+        self,
+        asset_id: UUID,
+        *,
+        show_web_qr: bool = False,
+        web_qr_size: int = 1,
+        web_qr_position: str = "bottom-left",
+        web_qr_inset_x: int = 36,
+        web_qr_inset_y: int = 36,
     ) -> Preview:
         if self._closed:
             raise AssetUnavailable("image relay is closed")
-        qr_size = web_qr_size if show_web_qr else 0
-        key = (asset_id, qr_size)
+        placement = (
+            QrPlacement(web_qr_size, web_qr_position, web_qr_inset_x, web_qr_inset_y)
+            if show_web_qr
+            else None
+        )
+        key = (asset_id, placement)
         preview = self._previews.get(key)
         if preview is not None:
             self._previews.move_to_end(key)
@@ -188,7 +252,7 @@ class ImageRelay:
         task = self._preview_tasks.get(key)
         if task is None:
             task = asyncio.create_task(
-                self._fetch_preview(asset_id, qr_size), name="image-preview-fetch"
+                self._fetch_preview(asset_id, placement), name="image-preview-fetch"
             )
             self._preview_tasks[key] = task
             self._active_mints.add(task)
@@ -204,7 +268,9 @@ class ImageRelay:
             self._previews.popitem(last=False)
         return preview
 
-    async def _fetch_preview(self, asset_id: UUID, web_qr_size: int) -> Preview:
+    async def _fetch_preview(
+        self, asset_id: UUID, placement: QrPlacement | None
+    ) -> Preview:
         async with self._semaphore:
             preview = await self._source.fetch_preview(asset_id, self._settings.max_response_bytes)
             if preview.content_type not in ALLOWED_IMAGE_TYPES:
@@ -224,8 +290,10 @@ class ImageRelay:
                         location = await fetch_location(asset_id)
                     except Exception:
                         logger.warning("asset_location_fetch_failed")
-            qr = self._web_qr(web_qr_size) if web_qr_size else None
-            return await asyncio.to_thread(_normalize_preview, preview, location, date, qr)
+            qr = self._web_qr(placement.size) if placement is not None else None
+            return await asyncio.to_thread(
+                _normalize_preview, preview, location, date, qr, placement
+            )
 
     def _web_qr(self, size: int) -> Image.Image | None:
         if self._dashboard_url is None:
@@ -352,6 +420,7 @@ def _normalize_preview(
     location: str | None = None,
     date: str | None = None,
     web_qr: Image.Image | None = None,
+    qr_placement: QrPlacement | None = None,
 ) -> Preview:
     try:
         with Image.open(io.BytesIO(preview.body)) as source:
@@ -372,8 +441,8 @@ def _normalize_preview(
             image = canvas
             if location or date:
                 _draw_metadata(image, location, date)
-            if web_qr is not None:
-                _draw_web_qr(image, web_qr)
+            if web_qr is not None and qr_placement is not None:
+                _draw_web_qr(image, web_qr, qr_placement)
             output = io.BytesIO()
             image.save(output, format="JPEG", quality=90, optimize=True)
     except (OSError, UnidentifiedImageError):
@@ -420,11 +489,25 @@ def _draw_location(image: Image.Image, location: str) -> None:
     _draw_metadata(image, location, None)
 
 
-def _draw_web_qr(image: Image.Image, qr: Image.Image) -> None:
-    margin = max(12, min(image.size) // 20)
+def _draw_web_qr(
+    image: Image.Image,
+    qr: Image.Image,
+    placement: QrPlacement = DEFAULT_QR_PLACEMENT,
+) -> None:
     padding = max(2, qr.width // 12)
     width, height = qr.width + padding * 2, qr.height + padding * 2
-    left, top = margin, image.height - height - margin
+    left = (
+        placement.inset_x
+        if placement.position.endswith("left")
+        else image.width - width - placement.inset_x
+    )
+    top = (
+        placement.inset_y
+        if placement.position.startswith("top")
+        else image.height - height - placement.inset_y
+    )
+    left = min(max(0, left), image.width - width)
+    top = min(max(0, top), image.height - height)
     sample = image.crop((left, top, left + width, top + height)).convert("L")
     luminance = ImageStat.Stat(sample).mean[0]
     dark_background = luminance < 145

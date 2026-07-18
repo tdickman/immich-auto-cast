@@ -51,6 +51,9 @@ def test_loads_normalized_settings_and_environment_secret(tmp_path: Path) -> Non
     assert settings.outputs[0].rotation.video_muted is True
     assert settings.outputs[0].rotation.show_web_qr is False
     assert settings.outputs[0].rotation.web_qr_size == 1
+    assert settings.outputs[0].rotation.web_qr_position == "bottom-left"
+    assert settings.outputs[0].rotation.web_qr_inset_x == 36
+    assert settings.outputs[0].rotation.web_qr_inset_y == 36
 
 
 def test_rejects_non_boolean_video_muting(tmp_path: Path) -> None:
@@ -65,6 +68,25 @@ def test_rejects_invalid_web_qr_size(tmp_path: Path, size: int | float) -> None:
     path = tmp_path / "config.toml"
     path.write_text(config_text().replace("interval = 30", f"interval = 30\nweb_qr_size = {size}"))
     with pytest.raises(ConfigError, match="web_qr_size"):
+        load_settings(path)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("web_qr_position", '"center"'),
+        ("web_qr_inset_x", -1),
+        ("web_qr_inset_x", 641),
+        ("web_qr_inset_y", 361),
+        ("web_qr_inset_y", 1.5),
+    ],
+)
+def test_rejects_invalid_web_qr_placement(
+    tmp_path: Path, field: str, value: str | int | float
+) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(config_text().replace("interval = 30", f"interval = 30\n{field} = {value}"))
+    with pytest.raises(ConfigError, match=field):
         load_settings(path)
 
 
@@ -164,6 +186,9 @@ def test_editable_settings_round_trip_every_value_and_mask_key(tmp_path: Path) -
         candidate_batch=31,
         show_web_qr=True,
         web_qr_size=3,
+        web_qr_position="top-right",
+        web_qr_inset_x=72,
+        web_qr_inset_y=54,
     )
     form["service"]["log_level"] = "debug"
 
@@ -178,8 +203,12 @@ def test_editable_settings_round_trip_every_value_and_mask_key(tmp_path: Path) -
     assert reloaded.settings.outputs[0].rotation.show_web_qr is True
     assert reloaded.form_values["outputs"][0]["show_web_qr"] is True
     assert reloaded.settings.outputs[0].rotation.web_qr_size == 3
+    assert reloaded.settings.outputs[0].rotation.web_qr_position == "top-right"
+    assert reloaded.settings.outputs[0].rotation.web_qr_inset_x == 72
+    assert reloaded.settings.outputs[0].rotation.web_qr_inset_y == 54
     assert "show_web_qr = true" in path.read_text(encoding="utf-8")
     assert "web_qr_size = 3" in path.read_text(encoding="utf-8")
+    assert 'web_qr_position = "top-right"' in path.read_text(encoding="utf-8")
     assert "[[outputs]]" in path.read_text(encoding="utf-8")
     assert "[chromecast]" not in path.read_text(encoding="utf-8")
     assert path.stat().st_mode & 0o777 == 0o600

@@ -12,7 +12,7 @@ from PIL import Image, ImageChops
 
 from cast_immich.config import ImmichSettings, RelaySettings
 from cast_immich.immich import Asset, ImmichClient, MediaType, Preview
-from cast_immich.relay import ImageRelay, _draw_metadata, _draw_web_qr, _make_qr
+from cast_immich.relay import ImageRelay, QrPlacement, _draw_metadata, _draw_web_qr, _make_qr
 
 ASSET_ID = UUID("12345678-1234-4234-8234-123456789abc")
 
@@ -58,6 +58,20 @@ def test_web_qr_badge_adapts_to_background_brightness() -> None:
     assert max(light_module) < 30
     assert max(dark.getpixel((margin + 1, top + qr.height // 2))) < 40
     assert min(light.getpixel((margin + 1, top + qr.height // 2))) > 220
+
+
+def test_web_qr_uses_corner_and_exact_insets() -> None:
+    qr = _make_qr("http://192.168.1.5:8080/", 2)
+    image = Image.new("RGB", (1280, 720), (220, 220, 220))
+    original = image.copy()
+
+    _draw_web_qr(image, qr, QrPlacement(2, "top-right", 24, 18))
+
+    bounds = ImageChops.difference(original, image).getbbox()
+    assert bounds is not None
+    assert bounds[0] > image.width - qr.width - 40
+    assert bounds[1] == 18
+    assert bounds[2] == image.width - 24
 
 
 class Source:

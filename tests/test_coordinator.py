@@ -157,6 +157,42 @@ def make_coordinator(
     return coordinator, queue, selector, cast
 
 
+@pytest.mark.asyncio
+async def test_qr_placement_is_forwarded_to_media_relay() -> None:
+    observed: dict[str, object] = {}
+
+    class PlacementRelay(Relay):
+        async def mint_media(self, asset: Asset, **options: object) -> tuple[str, str]:
+            observed.update(options)
+            return await self.mint(asset.id)
+
+    settings = RotationSettings(
+        60,
+        3,
+        15,
+        25,
+        50,
+        show_web_qr=True,
+        web_qr_size=3,
+        web_qr_position="top-right",
+        web_qr_inset_x=72,
+        web_qr_inset_y=54,
+    )
+    coordinator = Coordinator(
+        asyncio.Queue(), Selector(), PlacementRelay(), Cast(), settings, INSTALLATION_ID, 15
+    )
+
+    await coordinator._mint(Asset(ASSET_ID))
+
+    assert observed == {
+        "show_web_qr": True,
+        "web_qr_size": 3,
+        "web_qr_position": "top-right",
+        "web_qr_inset_x": 72,
+        "web_qr_inset_y": 54,
+    }
+
+
 def event(
     kind: EventKind,
     *,

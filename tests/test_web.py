@@ -267,7 +267,13 @@ async def test_dashboard_assets_expose_complete_operator_interface(
     assert 'outputField("Mute videos", "video_muted"' in javascript
     assert 'outputField("Show web interface QR code", "show_web_qr"' in javascript
     assert 'outputField("QR code size (1-6)", "web_qr_size"' in javascript
+    assert 'outputField("QR corner", "web_qr_position"' in javascript
+    assert 'outputField("Horizontal inset", "web_qr_inset_x"' in javascript
+    assert 'outputField("Vertical inset", "web_qr_inset_y"' in javascript
+    assert 'className = "qr-placement-preview"' in javascript
+    assert 'badge.addEventListener("pointermove"' in javascript
     assert 'if (options.max) control.max = options.max' in javascript
+    assert ".qr-placement-preview" in css
     assert 'control.checked = value ?? false' in javascript
     assert 'id="reconnect-button"' not in html
     assert "Stop cast" in html
