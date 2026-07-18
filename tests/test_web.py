@@ -21,10 +21,17 @@ from cast_immich.runtime import (
     RuntimeMode,
     RuntimeSnapshot,
 )
-from cast_immich.web import CSRF_HEADER, MUTATION_HEADER, SECURITY_HEADERS, create_management_app
+from cast_immich.web import (
+    AUTH_COOKIE,
+    CSRF_HEADER,
+    MUTATION_HEADER,
+    SECURITY_HEADERS,
+    create_management_app,
+)
 
 CSRF = "process-csrf-token"
 SECRET = "super-secret-api-key"
+WEB_PASSWORD = "dashboard-password"
 EVENT_ID = "opaque-event"
 UPCOMING_ID = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
 
@@ -129,9 +136,13 @@ class FakeSupervisor:
 @pytest.fixture
 async def management() -> tuple[TestClient[Any, Any], FakeSupervisor, str]:
     supervisor = FakeSupervisor()
-    client = TestClient(TestServer(create_management_app(supervisor, csrf_token=CSRF)))
+    client = TestClient(
+        TestServer(create_management_app(supervisor, password=WEB_PASSWORD, csrf_token=CSRF))
+    )
     await client.start_server()
     origin = str(client.make_url("/")).rstrip("/")
+    authenticated = await client.get(f"/?password={WEB_PASSWORD}", allow_redirects=False)
+    assert authenticated.status == 302
     try:
         yield client, supervisor, origin
     finally:
@@ -146,6 +157,32 @@ def mutation_headers(origin: str, **extra: str) -> dict[str, str]:
         CSRF_HEADER: CSRF,
         **extra,
     }
+
+
+async def test_password_is_required_once_per_browser_and_removed_from_url() -> None:
+    supervisor = FakeSupervisor()
+    client = TestClient(
+        TestServer(create_management_app(supervisor, password=WEB_PASSWORD, csrf_token=CSRF))
+    )
+    await client.start_server()
+    try:
+        unauthorized = await client.get("/")
+        invalid = await client.get("/?password=wrong", allow_redirects=False)
+        authenticated = await client.get(
+            f"/?view=controls&password={WEB_PASSWORD}", allow_redirects=False
+        )
+        page = await client.get("/")
+
+        assert unauthorized.status == invalid.status == 401
+        assert authenticated.status == 302
+        assert authenticated.headers["Location"] == "/?view=controls"
+        cookie = authenticated.cookies[AUTH_COOKIE]
+        assert cookie["httponly"] is True
+        assert cookie["samesite"] == "Strict"
+        assert WEB_PASSWORD not in cookie.value
+        assert page.status == 200
+    finally:
+        await client.close()
 
 
 async def test_status_and_config_are_safe_and_setup_schema_is_complete(

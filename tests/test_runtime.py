@@ -10,7 +10,7 @@ from uuid import UUID
 import pytest
 
 from cast_immich.cast import DiscoveredChromecast
-from cast_immich.config import ConfigPersistenceError, Settings
+from cast_immich.config import ConfigPersistenceError, Settings, prepare_settings
 from cast_immich.coordinator import Command, CommandResult, CoordinatorSnapshot, State
 from cast_immich.history import DisplayRecord, HistoryState, HistoryStore
 from cast_immich.immich import AssetUnavailable, Preview
@@ -89,6 +89,28 @@ installation_id_file = "identity"
 log_level = "INFO"
 revision = 0
 """
+
+
+def test_dashboard_access_is_embedded_in_runtime_qr_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    supervisor = RuntimeSupervisor(tmp_path / "config.toml")
+    supervisor.set_dashboard_access(9080, "spaces & symbols")
+    settings = prepare_settings(
+        tmp_path / "config.toml", form(), expected_revision=0, environ={}
+    ).document.settings
+    captured: dict[str, str] = {}
+
+    def capture_graph(
+        _settings: Settings, _history: HistoryStore, *, dashboard_url: str
+    ) -> object:
+        captured["url"] = dashboard_url
+        return object()
+
+    monkeypatch.setattr("cast_immich.runtime.ServiceGraph", capture_graph)
+    supervisor._graph_factory(settings, supervisor.history_store)
+
+    assert captured["url"] == "http://192.168.1.8:9080/?password=spaces+%26+symbols"
 
 
 class FakeGraph:

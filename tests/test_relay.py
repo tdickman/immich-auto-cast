@@ -88,6 +88,12 @@ def test_web_qr_opacity_dims_the_badge() -> None:
     assert sum(dimmed_difference) < sum(opaque_difference)
 
 
+def test_web_qr_accepts_authenticated_dashboard_url() -> None:
+    qr = _make_qr("http://192.168.1.5:8080/?password=random-secret")
+
+    assert qr.width > 0
+
+
 class Source:
     def __init__(self, preview: Preview) -> None:
         self.preview = preview

@@ -4,7 +4,10 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
+import secrets
 import signal
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -95,11 +98,12 @@ async def run_from_path(
                 loop.add_signal_handler(signum, stop_event.set)
                 installed_signals.append(signum)
 
+    password = _load_or_create_web_password(path.with_name("web-password"))
     supervisor = RuntimeSupervisor(path)
-    configure_dashboard = getattr(supervisor, "set_dashboard_port", None)
+    configure_dashboard = getattr(supervisor, "set_dashboard_access", None)
     if configure_dashboard is not None:
-        configure_dashboard(web_port)
-    management = ManagementServer(supervisor, web_host, web_port)
+        configure_dashboard(web_port, password)
+    management = ManagementServer(supervisor, password, web_host, web_port)
     stop_task: asyncio.Task[bool] | None = None
     failure_task: asyncio.Task[None] | None = None
     try:
@@ -122,3 +126,41 @@ async def run_from_path(
         await supervisor.close()
         for signum in installed_signals:
             loop.remove_signal_handler(signum)
+
+
+def _load_or_create_web_password(path: Path) -> str:
+    """Load an operator-provided password or atomically create a random one."""
+    temporary: Path | None = None
+    try:
+        if path.exists():
+            password = path.read_text(encoding="utf-8").strip()
+            if password:
+                path.chmod(0o600)
+                return password
+        path.parent.mkdir(parents=True, exist_ok=True)
+        password = secrets.token_urlsafe(24)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+        )
+        temporary = Path(temporary_name)
+        os.chmod(temporary, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            output.write(f"{password}\n")
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+        temporary = None
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+        return password
+    except OSError as error:
+        raise RuntimeError(f"cannot load web password: {error}") from None
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass

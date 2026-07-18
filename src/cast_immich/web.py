@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import hmac
 import ipaddress
 import secrets
 import time
@@ -24,6 +26,9 @@ from .runtime import ApplyStatus, ConfigSnapshot, OutputSnapshot, RuntimeSnapsho
 CLIENT_MAX_SIZE = 64 * 1024
 MUTATION_HEADER = "X-Cast-Immich-Request"
 CSRF_HEADER = "X-CSRF-Token"
+PASSWORD_PARAMETER = "password"
+AUTH_COOKIE = "cast-immich-auth"
+AUTH_COOKIE_MAX_AGE = 365 * 24 * 60 * 60
 SECURITY_HEADERS = {
     "Cache-Control": "no-store",
     "Content-Security-Policy": (
@@ -39,10 +44,14 @@ SECURITY_HEADERS = {
 def create_management_app(
     supervisor: RuntimeSupervisor,
     *,
+    password: str,
     csrf_token: str | None = None,
     allowed_hosts: set[str] | None = None,
 ) -> web.Application:
     token = csrf_token or secrets.token_urlsafe(32)
+    auth_token = hmac.new(
+        password.encode("utf-8"), b"cast-immich-web-access", hashlib.sha256
+    ).hexdigest()
 
     @web.middleware
     async def security_headers(request: web.Request, handler: Any) -> web.StreamResponse:
@@ -50,6 +59,28 @@ def create_management_app(
             response = web.json_response(
                 {"outcome": "invalid_host", "error": "management host is not allowed"},
                 status=421,
+            )
+        elif _valid_password(request, password):
+            query = [
+                (key, value)
+                for key, value in request.query.items()
+                if key != PASSWORD_PARAMETER
+            ]
+            response = web.Response(
+                status=302, headers={"Location": str(request.rel_url.with_query(query))}
+            )
+            response.set_cookie(
+                AUTH_COOKIE,
+                auth_token,
+                max_age=AUTH_COOKIE_MAX_AGE,
+                httponly=True,
+                samesite="Strict",
+                secure=request.scheme == "https",
+            )
+        elif not secrets.compare_digest(request.cookies.get(AUTH_COOKIE, ""), auth_token):
+            response = web.json_response(
+                {"outcome": "authentication_required", "error": "valid password required"},
+                status=401,
             )
         else:
             try:
@@ -484,6 +515,7 @@ def create_management_app(
 @dataclass(slots=True)
 class ManagementServer:
     supervisor: RuntimeSupervisor
+    password: str
     host: str = "127.0.0.1"
     port: int = 8080
     _runner: web.AppRunner | None = None
@@ -502,7 +534,10 @@ class ManagementServer:
         if self.host in {"127.0.0.1", "::1", "localhost"}:
             allowed = {"127.0.0.1", "::1", "localhost"}
         runner = web.AppRunner(
-            create_management_app(self.supervisor, allowed_hosts=allowed), access_log=None
+            create_management_app(
+                self.supervisor, password=self.password, allowed_hosts=allowed
+            ),
+            access_log=None,
         )
         await runner.setup()
         try:
@@ -530,6 +565,11 @@ def _mutation_failure(
     if not secrets.compare_digest(request.headers.get(CSRF_HEADER, ""), csrf_token):
         return _error(403, "invalid_csrf", "valid CSRF token required")
     return None
+
+
+def _valid_password(request: web.Request, password: str) -> bool:
+    supplied = request.query.get(PASSWORD_PARAMETER)
+    return supplied is not None and secrets.compare_digest(supplied, password)
 
 
 def _request_origin(request: web.Request, allowed_hosts: set[str] | None) -> str | None:

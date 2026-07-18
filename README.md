@@ -18,7 +18,7 @@ cp config.example.toml config.toml
 chmod 600 config.toml
 ```
 
-Start the service and open the dashboard locally at `http://127.0.0.1:8080`. It remains available in setup mode when `config.toml` is absent or invalid.
+Start the service and open the dashboard locally at `http://127.0.0.1:8080/?password=VALUE`, using the value in `web-password`. It remains available in setup mode when `config.toml` is absent or invalid. The service generates `web-password` with mode `0600` on first start if it does not exist; you can create or replace that file with your own password before starting the service. A valid first request authorizes that browser with an HttpOnly cookie and removes the password from the address bar.
 
 ```console
 export CAST_IMMICH_API_KEY='...'
@@ -33,7 +33,7 @@ On Raspberry Pi OS or another Debian-based systemd distribution, clone the repos
 ./scripts/install.sh
 ```
 
-The installer installs system packages and `uv` as needed, creates the locked production environment in `.venv`, and installs an `immich-auto-cast.service` system service. The service starts at boot, runs as the checkout owner, and restarts after failures. It continues in dashboard setup mode if `config.toml` does not exist yet.
+The installer installs system packages and `uv` as needed, creates the locked production environment in `.venv`, and installs an `immich-auto-cast.service` system service. The service starts at boot, runs as the checkout owner, and restarts after failures. It continues in dashboard setup mode if `config.toml` does not exist yet. Read `web-password` on the host or use the authenticated QR code to authorize a browser.
 
 The dashboard binds to `127.0.0.1:8080` by default. To make it available to devices on a trusted LAN, reinstall with an explicit bind address (do not expose it to an untrusted network):
 
@@ -50,7 +50,7 @@ sudo systemctl restart immich-auto-cast
 sudo immich-auto-cast-update
 ```
 
-`immich-auto-cast-update` performs a fast-forward-only pull from the branch's configured Git upstream, synchronizes dependencies from `uv.lock`, and restarts the service. Local configuration, installation identity, and state are ignored by Git and remain in the checkout. Re-run the installer if a release changes the systemd installation itself. Back up `config.toml`, `installation-id`, and `state.json`; restoring all three preserves configuration, ownership identity, pause/autocast settings, selected sources, recent-image exclusion, and bounded display history.
+`immich-auto-cast-update` performs a fast-forward-only pull from the branch's configured Git upstream, synchronizes dependencies from `uv.lock`, and restarts the service. Local configuration, installation identity, password, and state are ignored by Git and remain in the checkout. Re-run the installer if a release changes the systemd installation itself. Back up `config.toml`, `installation-id`, `web-password`, and `state.json`; restoring all four preserves dashboard access, configuration, ownership identity, pause/autocast settings, selected sources, recent-image exclusion, and bounded display history.
 
 `network-online.target` only orders startup; it does not guarantee that Wi-Fi, Immich, or a Chromecast stays available. The application retries discovery and every operational Immich failure indefinitely with bounded cooldowns, while systemd restarts it after an unhandled process failure. Authorization and incompatible API responses are shown as attention conditions but continue retrying. On restart, the persistent installation ID lets the service recognize receiver metadata that still proves ownership, renew the same asset with a fresh relay URL, and continue yielding to external or ambiguous playback.
 
@@ -77,7 +77,7 @@ The first valid configuration atomically creates `installation-id` beside the co
 - `outputs.idle_debounce`: short status-stabilization setting retained for configuration compatibility.
 - `outputs.load_timeout`: time allowed for media status to confirm a load.
 - `outputs.video_max_duration` and `outputs.video_muted`: reserved video settings. Video selection is temporarily disabled; see [`docs/video-support.md`](docs/video-support.md).
-- `outputs.show_web_qr`: overlays a small bottom-left QR code linking to the dashboard. Disabled by default.
+- `outputs.show_web_qr`: overlays a small bottom-left QR code linking to and authenticating with the dashboard. Disabled by default.
 - `outputs.web_qr_size`: QR module scale from 1 (tiny, the default) through 6 (largest).
 - `outputs.web_qr_position`, `outputs.web_qr_inset_x`, and `outputs.web_qr_inset_y`: per-output corner and exact 1280x720 canvas insets.
 - `outputs.web_qr_opacity`: QR badge opacity from 50% through 100%, defaulting to 75%.

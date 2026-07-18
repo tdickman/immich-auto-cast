@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import urlencode
 from uuid import UUID
 
 from .cast import CastAdapter, DiscoveredChromecast, discover_chromecasts
@@ -443,8 +444,8 @@ class RuntimeSupervisor:
         self._graph_monitor: asyncio.Task[None] | None = None
         self._failures: asyncio.Queue[BaseException] = asyncio.Queue(maxsize=1)
 
-    def set_dashboard_port(self, port: int) -> None:
-        """Set the externally reachable management port before activation."""
+    def set_dashboard_access(self, port: int, password: str) -> None:
+        """Set the externally reachable authenticated dashboard URL before activation."""
         if self._started:
             raise RuntimeError("dashboard port cannot change after startup")
         if self._graph_factory is not ServiceGraph:
@@ -453,8 +454,9 @@ class RuntimeSupervisor:
         def graph_factory(settings: Settings, history: HistoryStore) -> ServiceGraph:
             host = settings.relay.advertised_host
             authority = f"[{host}]" if ":" in host else host
+            query = urlencode({"password": password})
             return ServiceGraph(
-                settings, history, dashboard_url=f"http://{authority}:{port}/"
+                settings, history, dashboard_url=f"http://{authority}:{port}/?{query}"
             )
 
         self._graph_factory = graph_factory

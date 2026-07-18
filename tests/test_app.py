@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from cast_immich.app import JsonFormatter, run_from_path
+from cast_immich.app import JsonFormatter, _load_or_create_web_password, run_from_path
 
 
 def test_structured_logs_contain_reason_without_credentials() -> None:
@@ -19,6 +19,20 @@ def test_structured_logs_contain_reason_without_credentials() -> None:
         "message": "state_changed",
         "reason": "external_media",
     }
+
+
+def test_web_password_is_generated_once_or_uses_existing_value(tmp_path: Path) -> None:
+    path = tmp_path / "web-password"
+
+    generated = _load_or_create_web_password(path)
+    reloaded = _load_or_create_web_password(path)
+    path.write_text("chosen-password\n", encoding="utf-8")
+    chosen = _load_or_create_web_password(path)
+
+    assert generated == reloaded
+    assert len(generated) >= 24
+    assert chosen == "chosen-password"
+    assert path.stat().st_mode & 0o777 == 0o600
 
 
 @pytest.mark.asyncio
@@ -42,8 +56,9 @@ async def test_run_from_path_starts_and_closes_management_before_supervisor(
             await __import__("asyncio").Event().wait()
 
     class FakeManagement:
-        def __init__(self, _supervisor: object, host: str, port: int) -> None:
+        def __init__(self, _supervisor: object, password: str, host: str, port: int) -> None:
             assert (host, port) == ("127.0.0.2", 9080)
+            assert password
 
         async def start(self) -> None:
             events.append("web-start")
@@ -81,7 +96,10 @@ async def test_run_from_path_propagates_runtime_failure_after_cleanup(
             events.append("supervisor-close")
 
     class FakeManagement:
-        def __init__(self, _supervisor: object, _host: str, _port: int) -> None:
+        def __init__(
+            self, _supervisor: object, password: str, _host: str, _port: int
+        ) -> None:
+            assert password
             pass
 
         async def start(self) -> None:
