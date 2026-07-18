@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import deque
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -488,6 +489,8 @@ async def test_seek_to_previous_photo_replays_forward_from_that_occurrence() -> 
 
     coordinator, _queue, _selector, cast = make_coordinator(history)
     coordinator._relay = AnyRelay()
+    queued = tuple(Asset(UUID(int=value)) for value in range(30, 40))
+    coordinator._upcoming = deque(queued, maxlen=10)
     url = "http://192.168.1.5:8787/image/current"
     metadata = {
         "schema": "cast-immich/v1",

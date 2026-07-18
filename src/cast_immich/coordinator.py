@@ -410,7 +410,7 @@ class Coordinator:
             if sequence is None:
                 self._store_result(event, CommandResult.REFUSED_INVALID_TARGET)
                 return
-            self._upcoming = deque(sequence, maxlen=10)
+            self._upcoming = deque(sequence[:10], maxlen=10)
         self._active_command = (event, ownership)
         await self._request_refresh(event.command.value)
 
