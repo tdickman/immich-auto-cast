@@ -221,6 +221,155 @@ async def test_preparation_publishes_the_next_ten_assets_in_cast_order() -> None
 
 
 @pytest.mark.asyncio
+async def test_album_source_is_applied_to_the_next_selection() -> None:
+    album_id = UUID(int=99)
+
+    class SourceSelector(Selector):
+        def __init__(self) -> None:
+            super().__init__()
+            self.sources: list[UUID | None] = []
+
+        async def select_assets_from(
+            self,
+            recent: set[UUID],
+            batch_size: int,
+            count: int,
+            selected_album: UUID | None,
+        ) -> tuple[Asset, ...]:
+            self.sources.append(selected_album)
+            return await self.select_assets(recent, batch_size, count)
+
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    selector, cast = SourceSelector(), Cast()
+    coordinator = Coordinator(
+        queue,
+        selector,
+        Relay(),
+        cast,
+        RotationSettings(0.02, 0.01, 0.02, 5, 10),
+        INSTALLATION_ID,
+        0.02,
+    )
+    source_change = asyncio.create_task(coordinator.select_source(album_id))
+    await drain_one(queue, coordinator)
+    assert await source_change is True
+
+    await drive_idle_to_load(coordinator, queue)
+
+    assert selector.sources == [album_id]
+    assert coordinator.snapshot.selected_album == album_id
+    await coordinator.close()
+
+
+@pytest.mark.asyncio
+async def test_seek_to_upcoming_photo_rebases_the_cast_order() -> None:
+    assets = tuple(Asset(UUID(int=value)) for value in range(1, 12))
+
+    class QueueSelector:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def select_assets(
+            self, recent: set[UUID], batch_size: int, count: int
+        ) -> tuple[Asset, ...]:
+            self.calls += 1
+            start = 1 if self.calls == 1 else 100
+            return tuple(Asset(UUID(int=start + value)) for value in range(count))
+
+    class QueueRelay:
+        async def preload(self, asset_id: UUID) -> None:
+            pass
+
+        async def mint(self, asset_id: UUID) -> tuple[str, str]:
+            return f"http://192.168.1.5:8787/image/{asset_id}", "image/jpeg"
+
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    cast = Cast()
+    coordinator = Coordinator(
+        queue,
+        QueueSelector(),
+        QueueRelay(),
+        cast,
+        RotationSettings(0.02, 0.01, 0.02, 5, 10),
+        INSTALLATION_ID,
+        0.02,
+    )
+    await drive_idle_to_load(coordinator, queue)
+    url, metadata = await confirm_load(coordinator, cast)
+    runner = asyncio.create_task(coordinator.run())
+    refreshes = len(cast.refreshes)
+    seek = asyncio.create_task(coordinator.seek("upcoming", str(assets[4].id), "seek-next"))
+    await wait_until(lambda: len(cast.refreshes) > refreshes)
+    await coordinator.handle(
+        event(EventKind.RECEIVER, receiver=ReceiverStatus("CC1AD845", "session"))
+    )
+    await coordinator.handle(event(EventKind.MEDIA, media=MediaStatus("PLAYING", url, 3, metadata)))
+    await wait_until(lambda: len(cast.refreshes) > refreshes + 1)
+    await coordinator.handle(
+        event(EventKind.RECEIVER, receiver=ReceiverStatus("CC1AD845", "session"))
+    )
+    await coordinator.handle(event(EventKind.MEDIA, media=MediaStatus("PLAYING", url, 3, metadata)))
+
+    assert await seek is CommandResult.APPLIED
+    assert cast.loads[-1][3]["assetId"] == str(assets[4].id)
+    assert coordinator.snapshot.upcoming_assets[:2] == (assets[5].id, assets[6].id)
+    await coordinator.close()
+    runner.cancel()
+
+
+@pytest.mark.asyncio
+async def test_seek_to_previous_photo_replays_forward_from_that_occurrence() -> None:
+    older_id, newer_id = UUID(int=20), UUID(int=21)
+    history = History()
+    history.records = [
+        DisplayRecord("newer", "newer-load", str(newer_id), datetime.now(UTC)),
+        DisplayRecord("older", "older-load", str(older_id), datetime(2025, 1, 1, tzinfo=UTC)),
+    ]
+
+    class AnyRelay:
+        async def preload(self, asset_id: UUID) -> None:
+            pass
+
+        async def mint(self, asset_id: UUID) -> tuple[str, str]:
+            return f"http://192.168.1.5:8787/image/{asset_id}", "image/jpeg"
+
+    coordinator, _queue, _selector, cast = make_coordinator(history)
+    coordinator._relay = AnyRelay()
+    url = "http://192.168.1.5:8787/image/current"
+    metadata = {
+        "schema": "cast-immich/v1",
+        "installationId": str(INSTALLATION_ID),
+        "loadId": "current-load",
+        "contentUrl": url,
+        "assetId": str(ASSET_ID),
+    }
+    await coordinator.handle(event(EventKind.CONNECTED))
+    await coordinator.handle(
+        event(EventKind.RECEIVER, receiver=ReceiverStatus("CC1AD845", "session"))
+    )
+    await coordinator.handle(event(EventKind.MEDIA, media=MediaStatus("PLAYING", url, 3, metadata)))
+    runner = asyncio.create_task(coordinator.run())
+    refreshes = len(cast.refreshes)
+    seek = asyncio.create_task(coordinator.seek("history", "older", "seek-old"))
+    await wait_until(lambda: len(cast.refreshes) > refreshes)
+    await coordinator.handle(
+        event(EventKind.RECEIVER, receiver=ReceiverStatus("CC1AD845", "session"))
+    )
+    await coordinator.handle(event(EventKind.MEDIA, media=MediaStatus("PLAYING", url, 3, metadata)))
+    await wait_until(lambda: len(cast.refreshes) > refreshes + 1)
+    await coordinator.handle(
+        event(EventKind.RECEIVER, receiver=ReceiverStatus("CC1AD845", "session"))
+    )
+    await coordinator.handle(event(EventKind.MEDIA, media=MediaStatus("PLAYING", url, 3, metadata)))
+
+    assert await seek is CommandResult.APPLIED
+    assert cast.loads[-1][3]["assetId"] == str(older_id)
+    assert coordinator.snapshot.upcoming_assets[0] == newer_id
+    await coordinator.close()
+    runner.cancel()
+
+
+@pytest.mark.asyncio
 async def test_backdrop_without_media_is_idle_and_sends_one_load() -> None:
     coordinator, queue, selector, cast = make_coordinator()
     await coordinator.handle(event(EventKind.CONNECTED))

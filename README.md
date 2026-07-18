@@ -6,7 +6,7 @@
 
 - CPython 3.13
 - [`uv`](https://docs.astral.sh/uv/)
-- Immich 3.x API key with `asset.read` and `asset.view`
+- Immich 3.x API key with `asset.read`, `asset.view`, and `album.read`
 - Chromecast and service host on a network where mDNS and Cast traffic work
 - A TCP relay address reachable by the Chromecast
 
@@ -78,7 +78,7 @@ Troubleshooting:
 1. Confirm `relay.advertised_host:port` is reachable from another device on the Chromecast network.
 2. Confirm UDP 5353 multicast is not blocked and client isolation is off.
 3. Confirm the UUID rather than the friendly name is configured.
-4. Confirm the Immich key has `asset.read` and `asset.view`.
+4. Confirm the Immich key has `asset.read`, `asset.view`, and `album.read`.
 5. Confirm the API-key user has eligible timeline images.
 6. If the dashboard is remote, confirm `--web-host` is a reachable trusted-LAN interface and TCP port 8080 is allowed only from that LAN.
 

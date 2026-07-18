@@ -39,6 +39,14 @@ class AssetSelector(Protocol):
         self, recent: set[UUID], batch_size: int, count: int
     ) -> tuple[Asset, ...]: ...
 
+    async def select_assets_from(
+        self,
+        recent: set[UUID],
+        batch_size: int,
+        count: int,
+        album_id: UUID | None,
+    ) -> tuple[Asset, ...]: ...
+
 
 class Relay(Protocol):
     async def preload(self, asset_id: UUID) -> None: ...
@@ -73,6 +81,7 @@ class Command(StrEnum):
     ENABLE = "enable"
     NEXT = "next"
     STOP = "stop"
+    SEEK = "seek"
 
 
 class CommandResult(StrEnum):
@@ -80,6 +89,7 @@ class CommandResult(StrEnum):
     ALREADY_APPLIED = "already_applied"
     REFUSED_NOT_OWNED = "refused_not_owned"
     REFUSED_BUSY = "refused_busy"
+    REFUSED_INVALID_TARGET = "refused_invalid_target"
     FAILED = "failed"
 
 
@@ -91,6 +101,9 @@ class CoordinatorSnapshot:
     error: str | None = None
     last_display: DisplayRecord | None = None
     upcoming_assets: tuple[UUID, ...] = ()
+    current_asset: UUID | None = None
+    current_load_id: str | None = None
+    selected_album: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +111,14 @@ class CommandEvent:
     command: Command
     request_id: str
     completion: asyncio.Future[CommandResult]
+    target_kind: str | None = None
+    target_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SourceEvent:
+    album_id: UUID | None
+    completion: asyncio.Future[bool]
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,7 +140,7 @@ class _PreparedEvent:
     upcoming: tuple[Asset, ...] = ()
 
 
-CoordinatorEvent = CastEvent | CommandEvent | _TimerEvent | _PreparedEvent
+CoordinatorEvent = CastEvent | CommandEvent | SourceEvent | _TimerEvent | _PreparedEvent
 
 
 class Coordinator:
@@ -155,6 +176,7 @@ class Coordinator:
         self._media: tuple[MediaStatus, float] | None = None
         self._recent: deque[UUID] = deque(maxlen=settings.recent_history)
         self._upcoming: deque[Asset] = deque(maxlen=10)
+        self._selected_album: UUID | None = None
         self._nonce = 0
         self._timer: asyncio.Task[None] | None = None
         self._preparation: asyncio.Task[None] | None = None
@@ -165,7 +187,9 @@ class Coordinator:
         self._failure_count = 0
         self._stopping = False
         self._active_command: tuple[CommandEvent, tuple[str, str, UUID] | None] | None = None
-        self._command_results: OrderedDict[str, tuple[Command, CommandResult]] = OrderedDict()
+        self._command_results: OrderedDict[
+            str, tuple[tuple[Command, str | None, str | None], CommandResult]
+        ] = OrderedDict()
         self._command_waiters: dict[str, list[asyncio.Future[CommandResult]]] = {}
         self._snapshot = CoordinatorSnapshot(self.state, True, 0)
 
@@ -180,6 +204,26 @@ class Coordinator:
             return CommandResult.FAILED
         completion: asyncio.Future[CommandResult] = asyncio.get_running_loop().create_future()
         await self.queue.put(CommandEvent(command, request_id, completion))
+        return await completion
+
+    async def seek(self, target_kind: str, target_id: str, request_id: str) -> CommandResult:
+        if target_kind not in {"history", "upcoming"} or not target_id:
+            return CommandResult.REFUSED_INVALID_TARGET
+        if not request_id:
+            raise ValueError("request_id must not be blank")
+        if self._stopping:
+            return CommandResult.FAILED
+        completion: asyncio.Future[CommandResult] = asyncio.get_running_loop().create_future()
+        await self.queue.put(
+            CommandEvent(Command.SEEK, request_id, completion, target_kind, target_id)
+        )
+        return await completion
+
+    async def select_source(self, album_id: UUID | None) -> bool:
+        if self._stopping:
+            return False
+        completion: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+        await self.queue.put(SourceEvent(album_id, completion))
         return await completion
 
     async def pause(self, request_id: str) -> CommandResult:
@@ -213,6 +257,8 @@ class Coordinator:
             await self._handle_cast(event)
         elif isinstance(event, CommandEvent):
             await self._handle_command(event)
+        elif isinstance(event, SourceEvent):
+            self._handle_source(event)
         elif event.generation != self._generation or event.nonce != self._nonce:
             pass
         elif isinstance(event, _TimerEvent):
@@ -246,14 +292,18 @@ class Coordinator:
             return
         duplicate = self._command_results.get(event.request_id)
         if duplicate is not None:
-            result = duplicate[1] if duplicate[0] is event.command else CommandResult.FAILED
+            result = (
+                duplicate[1]
+                if duplicate[0] == self._command_signature(event)
+                else CommandResult.FAILED
+            )
             event.completion.set_result(result)
             return
         if (
             self._active_command is not None
             and self._active_command[0].request_id == event.request_id
         ):
-            if self._active_command[0].command is event.command:
+            if self._command_signature(self._active_command[0]) == self._command_signature(event):
                 self._command_waiters.setdefault(event.request_id, []).append(event.completion)
             else:
                 event.completion.set_result(CommandResult.FAILED)
@@ -268,8 +318,63 @@ class Coordinator:
         if ownership is None:
             self._store_result(event, CommandResult.REFUSED_NOT_OWNED)
             return
+        if event.command is Command.SEEK:
+            sequence = await self._seek_sequence(event)
+            if sequence is None:
+                self._store_result(event, CommandResult.REFUSED_INVALID_TARGET)
+                return
+            self._upcoming = deque(sequence, maxlen=10)
         self._active_command = (event, ownership)
         await self._request_refresh(event.command.value)
+
+    def _handle_source(self, event: SourceEvent) -> None:
+        if event.completion.cancelled():
+            return
+        if self._active_command is not None or self.state is State.LOAD_PENDING:
+            event.completion.set_result(False)
+            return
+        if self._selected_album == event.album_id:
+            event.completion.set_result(True)
+            return
+        owned = self._ownership_current()
+        self._invalidate_work(preserve_expected=owned is not None)
+        self._upcoming.clear()
+        self._selected_album = event.album_id
+        if owned is not None:
+            self._expected = owned
+            self.state = State.OWNED
+            if self._rotation_enabled:
+                self._schedule("rotate", self._settings.interval)
+        elif self.state is State.IDLE_CANDIDATE and self._rotation_enabled:
+            self._begin_preparation("idle")
+        event.completion.set_result(True)
+
+    async def _seek_sequence(self, event: CommandEvent) -> tuple[Asset, ...] | None:
+        if event.target_kind == "upcoming":
+            try:
+                target = UUID(str(event.target_id))
+            except ValueError:
+                return None
+            upcoming = tuple(self._upcoming)
+            index = next((i for i, asset in enumerate(upcoming) if asset.id == target), None)
+            return upcoming[index:] if index is not None else None
+        if event.target_kind != "history" or self._history is None:
+            return None
+        try:
+            state = await asyncio.to_thread(self._history.load)
+        except Exception:
+            return None
+        index = next(
+            (i for i, record in enumerate(state.records) if record.event_id == event.target_id),
+            None,
+        )
+        if index is None:
+            return None
+        try:
+            replay = tuple(Asset(UUID(record.asset_id)) for record in state.records[index::-1])
+        except ValueError:
+            return None
+        return replay + tuple(self._upcoming)
 
     async def _set_rotation(self, event: CommandEvent, enabled: bool) -> None:
         if self._rotation_enabled is enabled:
@@ -292,7 +397,7 @@ class Coordinator:
 
     def _store_result(self, event: CommandEvent, result: CommandResult) -> None:
         if event.request_id not in self._command_results:
-            self._command_results[event.request_id] = (event.command, result)
+            self._command_results[event.request_id] = (self._command_signature(event), result)
             while len(self._command_results) > 256:
                 self._command_results.popitem(last=False)
         if not event.completion.done():
@@ -300,6 +405,10 @@ class Coordinator:
         for completion in self._command_waiters.pop(event.request_id, []):
             if not completion.done():
                 completion.set_result(result)
+
+    @staticmethod
+    def _command_signature(event: CommandEvent) -> tuple[Command, str | None, str | None]:
+        return event.command, event.target_kind, event.target_id
 
     def _complete_active(self, result: CommandResult) -> None:
         active, self._active_command = self._active_command, None
@@ -443,6 +552,9 @@ class Coordinator:
         elif purpose == "next" and self._active_ownership_matches():
             self.state = State.OWNED
             self._begin_preparation("next")
+        elif purpose == "seek" and self._active_ownership_matches():
+            self.state = State.OWNED
+            self._begin_preparation("next")
         elif purpose == "stop" and self._active_ownership_matches():
             try:
                 stopped = await self._cast.stop_media(self._generation)
@@ -483,13 +595,20 @@ class Coordinator:
             candidates = list(self._upcoming)
             needed = 11 - len(candidates)
             try:
-                candidates.extend(
-                    await self._selector.select_assets(
-                        set(self._recent) | {asset.id for asset in candidates},
+                recent = set(self._recent) | {asset.id for asset in candidates}
+                source_selector = getattr(self._selector, "select_assets_from", None)
+                if source_selector is None:
+                    selected = await self._selector.select_assets(
+                        recent, self._settings.candidate_batch, needed
+                    )
+                else:
+                    selected = await source_selector(
+                        recent,
                         self._settings.candidate_batch,
                         needed,
+                        self._selected_album,
                     )
-                )
+                candidates.extend(selected)
             except Exception:
                 if not candidates:
                     raise
@@ -692,6 +811,7 @@ class Coordinator:
         self._complete_active(CommandResult.REFUSED_NOT_OWNED)
 
     def _publish_snapshot(self) -> None:
+        current = self._ownership_current()
         self._snapshot = CoordinatorSnapshot(
             state=self.state,
             rotation_enabled=self._rotation_enabled,
@@ -699,4 +819,7 @@ class Coordinator:
             error=self._error,
             last_display=self._last_display,
             upcoming_assets=tuple(asset.id for asset in self._upcoming),
+            current_asset=current[2] if current is not None else None,
+            current_load_id=current[0] if current is not None else None,
+            selected_album=self._selected_album,
         )

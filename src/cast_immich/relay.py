@@ -12,7 +12,7 @@ from typing import Protocol
 from uuid import UUID
 
 from aiohttp import web
-from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL import Image, ImageDraw, ImageFont, ImageOps, UnidentifiedImageError
 
 from .config import RelaySettings
 from .immich import AssetUnavailable, Preview
@@ -38,6 +38,8 @@ PREVIEW_CACHE_SIZE = 3
 
 class PreviewSource(Protocol):
     async def fetch_preview(self, asset_id: UUID, max_bytes: int | None = None) -> Preview: ...
+
+    async def fetch_location(self, asset_id: UUID) -> str | None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,7 +132,14 @@ class ImageRelay:
             preview = await self._source.fetch_preview(asset_id, self._settings.max_response_bytes)
             if preview.content_type not in ALLOWED_IMAGE_TYPES:
                 raise AssetUnavailable("asset preview is not a supported image type")
-            return await asyncio.to_thread(_normalize_preview, preview)
+            location: str | None = None
+            fetch_location = getattr(self._source, "fetch_location", None)
+            if fetch_location is not None:
+                try:
+                    location = await fetch_location(asset_id)
+                except Exception:
+                    logger.warning("asset_location_fetch_failed")
+            return await asyncio.to_thread(_normalize_preview, preview, location)
 
     async def start(self) -> None:
         if self._runner is not None:
@@ -180,7 +189,7 @@ class ImageRelay:
             self._tokens.pop(token, None)
 
 
-def _normalize_preview(preview: Preview) -> Preview:
+def _normalize_preview(preview: Preview, location: str | None = None) -> Preview:
     try:
         with Image.open(io.BytesIO(preview.body)) as source:
             if source.width * source.height > MAX_IMAGE_PIXELS:
@@ -189,8 +198,40 @@ def _normalize_preview(preview: Preview) -> Preview:
             image.thumbnail(MAX_CAST_SIZE, Image.Resampling.LANCZOS)
             if image.mode != "RGB":
                 image = image.convert("RGB")
+            if location:
+                _draw_location(image, location)
             output = io.BytesIO()
             image.save(output, format="JPEG", quality=90, optimize=True)
     except (OSError, UnidentifiedImageError):
         raise AssetUnavailable("asset preview is not a valid image") from None
     return Preview(output.getvalue(), "image/jpeg")
+
+
+def _draw_location(image: Image.Image, location: str) -> None:
+    label = location.strip()[:120]
+    if not label:
+        return
+    draw = ImageDraw.Draw(image, "RGBA")
+    font = ImageFont.load_default(size=max(12, min(image.size) // 28))
+    padding = max(6, min(image.size) // 80)
+    margin = max(8, min(image.size) // 45)
+    available_width = max(1, image.width - (margin + padding) * 2)
+    while len(label) > 4 and draw.textlength(label, font=font) > available_width:
+        label = f"{label[:-4].rstrip()}..."
+    box = draw.textbbox((0, 0), label, font=font)
+    width, height = box[2] - box[0], box[3] - box[1]
+    right, bottom = image.width - margin, image.height - margin
+    background = (
+        right - width - padding * 2,
+        bottom - height - padding * 2,
+        right,
+        bottom,
+    )
+    draw.rounded_rectangle(background, radius=padding, fill=(0, 0, 0, 155))
+    draw.text(
+        (right - padding, bottom - padding),
+        label,
+        font=font,
+        fill=(255, 255, 255, 235),
+        anchor="rb",
+    )

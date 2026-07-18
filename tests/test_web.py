@@ -12,7 +12,7 @@ from cast_immich.cast import DiscoveredChromecast
 from cast_immich.config import SecretSource, default_form_values
 from cast_immich.coordinator import Command, CommandResult, CoordinatorSnapshot, State
 from cast_immich.history import DisplayRecord, HistoryState
-from cast_immich.immich import AssetUnavailable, Preview
+from cast_immich.immich import Album, AssetUnavailable, Preview
 from cast_immich.runtime import (
     ApplySettingsResult,
     ApplyStatus,
@@ -42,6 +42,8 @@ class FakeSupervisor:
         self.config_snapshot = ConfigSnapshot(4, values, True, SecretSource.FILE)
         self.apply_calls: list[tuple[dict[str, dict[str, Any]], int]] = []
         self.command_calls: list[tuple[Command, str]] = []
+        self.seek_calls: list[tuple[str, str, str]] = []
+        self.source_calls: list[UUID | None] = []
         self.discovery_calls = 0
         self.reconnect_calls = 0
         self.apply_status = ApplyStatus.APPLIED
@@ -72,6 +74,17 @@ class FakeSupervisor:
         self.reconnect_calls += 1
         return True
 
+    async def albums(self) -> tuple[Album, ...]:
+        return (Album(UUID(int=7), "Summer", 24),)
+
+    async def select_source(self, album_id: UUID | None) -> bool:
+        self.source_calls.append(album_id)
+        return True
+
+    async def seek(self, target_kind: str, target_id: str, request_id: str) -> CommandResult:
+        self.seek_calls.append((target_kind, target_id, request_id))
+        return CommandResult.APPLIED
+
     async def history_snapshot(self) -> HistoryState:
         return HistoryState(records=(self.record,))
 
@@ -84,6 +97,11 @@ class FakeSupervisor:
         if asset_id != UPCOMING_ID:
             raise AssetUnavailable("not a current upcoming asset")
         return Preview(b"upcoming-data", "image/webp")
+
+    async def current_thumbnail(self, asset_id: UUID) -> Preview:
+        if asset_id != UUID(self.record.asset_id):
+            raise AssetUnavailable("not current")
+        return Preview(b"current-data", "image/jpeg")
 
 
 @pytest.fixture
@@ -126,6 +144,7 @@ async def test_status_and_config_are_safe_and_setup_schema_is_complete(
         "generation": 9,
         "error": None,
         "last_display_event_id": None,
+        "selected_album_id": None,
     }
     assert config_payload["values"]["immich"]["api_key"] == ""
     assert config_payload["api_key_configured"] is True
@@ -160,7 +179,9 @@ async def test_dashboard_assets_expose_complete_operator_interface(
         label in html for label in ("Pause rotation", "Next photo", "Reconnect", "Stop cast")
     )
     assert 'id="history-list"' in html
+    assert 'id="current-list"' in html
     assert 'id="upcoming-list"' in html
+    assert 'id="album-select"' in html
     assert "X-CSRF-Token" in javascript
     assert "@media (max-width: 520px)" in css
     assert "overflow-x: auto" in css
@@ -312,6 +333,34 @@ async def test_discovery_controls_and_reconnect_use_narrow_runtime_operations(
     assert supervisor.discovery_calls == supervisor.reconnect_calls == 1
 
 
+async def test_album_source_and_photo_seek_use_guarded_operations(
+    management: tuple[TestClient[Any, Any], FakeSupervisor, str],
+) -> None:
+    client, supervisor, origin = management
+    albums = await client.get("/api/albums")
+    album_id = UUID(int=7)
+    source = await client.post(
+        "/api/source", headers=mutation_headers(origin), json={"album_id": str(album_id)}
+    )
+    seek = await client.post(
+        "/api/seek",
+        headers=mutation_headers(origin),
+        json={
+            "request_id": "seek-1",
+            "target_kind": "upcoming",
+            "target_id": str(UPCOMING_ID),
+        },
+    )
+
+    assert await albums.json() == {
+        "selected_album_id": None,
+        "albums": [{"id": str(album_id), "name": "Summer", "asset_count": 24}],
+    }
+    assert source.status == seek.status == 200
+    assert supervisor.source_calls == [album_id]
+    assert supervisor.seek_calls == [("upcoming", str(UPCOMING_ID), "seek-1")]
+
+
 async def test_history_is_opaque_and_thumbnail_rejects_arbitrary_ids(
     management: tuple[TestClient[Any, Any], FakeSupervisor, str],
 ) -> None:
@@ -324,6 +373,7 @@ async def test_history_is_opaque_and_thumbnail_rejects_arbitrary_ids(
 
     assert payload == {
         "rotation_enabled": True,
+        "current": None,
         "records": [
             {
                 "event_id": EVENT_ID,
@@ -354,3 +404,36 @@ async def test_history_is_opaque_and_thumbnail_rejects_arbitrary_ids(
     assert upcoming.headers["Content-Type"] == "image/webp"
     assert await upcoming.read() == b"upcoming-data"
     assert arbitrary_upcoming.status == 404
+
+
+async def test_current_photo_is_separate_from_previous_history(
+    management: tuple[TestClient[Any, Any], FakeSupervisor, str],
+) -> None:
+    client, supervisor, _origin = management
+    current_id = UUID(supervisor.record.asset_id)
+    supervisor.snapshot = RuntimeSnapshot(
+        RuntimeMode.ACTIVE,
+        4,
+        2,
+        CoordinatorSnapshot(
+            State.OWNED,
+            True,
+            9,
+            last_display=supervisor.record,
+            current_asset=current_id,
+            current_load_id=supervisor.record.load_id,
+        ),
+    )
+
+    response = await client.get("/api/history")
+    payload = await response.json()
+    thumbnail = await client.get(f"/api/current/{current_id}/thumbnail")
+
+    assert payload["records"] == []
+    assert payload["current"] == {
+        "asset_id": str(current_id),
+        "confirmed_at": "2026-07-17T12:00:00Z",
+        "thumbnail_url": f"/api/current/{current_id}/thumbnail",
+    }
+    assert thumbnail.status == 200
+    assert await thumbnail.read() == b"current-data"

@@ -32,6 +32,11 @@
             <span class="readout-label">Receiver</span>
             <strong id="cast-state">Connecting</strong>
             <span id="cast-detail">Checking playback</span>
+            <label class="source-control">Photo source
+              <select id="album-select">
+                <option value="">Any photo from the timeline</option>
+              </select>
+            </label>
           </div>
           <div class="transport" aria-label="Playback controls">
             <button class="control-button primary" id="rotation-toggle" type="button">
@@ -51,6 +56,15 @@
       </section>
 
       <section class="gallery-grid">
+        <div class="gallery-panel current-panel" aria-labelledby="current-title">
+          <div class="section-heading">
+            <h2 id="current-title">Now showing</h2>
+            <span class="history-count" id="current-count">0</span>
+          </div>
+          <div class="contact-sheet" id="current-list" aria-live="polite">
+            <p class="empty-state">No photo is currently casting.</p>
+          </div>
+        </div>
         <div class="gallery-panel" aria-labelledby="history-title">
           <div class="section-heading">
             <h2 id="history-title">Previous</h2>

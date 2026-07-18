@@ -7,7 +7,7 @@ from uuid import UUID
 
 import aiohttp
 import pytest
-from PIL import Image
+from PIL import Image, ImageChops
 
 from cast_immich.config import RelaySettings
 from cast_immich.immich import Preview
@@ -69,6 +69,31 @@ async def test_preview_is_resized_to_cast_display_limit() -> None:
     with Image.open(io.BytesIO(capability.preview.body)) as image:
         assert image.size == (957, 720)
         assert image.format == "JPEG"
+
+
+@pytest.mark.asyncio
+async def test_location_is_drawn_in_the_bottom_right_corner() -> None:
+    class LocatedSource(Source):
+        async def fetch_location(self, asset_id: UUID) -> str | None:
+            assert asset_id == ASSET_ID
+            return "Portland, Oregon"
+
+    body = image_bytes((640, 360))
+    plain = ImageRelay(settings(), Source(Preview(body, "image/png")))
+    located = ImageRelay(settings(), LocatedSource(Preview(body, "image/png")))
+
+    await plain.mint(ASSET_ID)
+    await located.mint(ASSET_ID)
+
+    plain_preview = next(iter(plain._tokens.values())).preview
+    located_preview = next(iter(located._tokens.values())).preview
+    with (
+        Image.open(io.BytesIO(plain_preview.body)) as plain_image,
+        Image.open(io.BytesIO(located_preview.body)) as located_image,
+    ):
+        difference = ImageChops.difference(plain_image, located_image)
+        assert difference.getbbox() is not None
+        assert difference.crop((320, 180, 640, 360)).getbbox() is not None
 
 
 @pytest.mark.asyncio

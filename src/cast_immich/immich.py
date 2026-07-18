@@ -30,6 +30,14 @@ class AssetUnavailable(ImmichError):
 @dataclass(frozen=True, slots=True)
 class Asset:
     id: UUID
+    location: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Album:
+    id: UUID
+    name: str
+    asset_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +55,7 @@ class ImmichClient:
         self._settings = settings
         self._session = session
         self._owns_session = session is None
+        self._locations: dict[UUID, str | None] = {}
 
     async def __aenter__(self) -> ImmichClient:
         await self.start()
@@ -75,27 +84,67 @@ class ImmichClient:
     async def select_assets(
         self, recent: set[UUID], batch_size: int, count: int
     ) -> tuple[Asset, ...]:
+        return await self.select_assets_from(recent, batch_size, count, None)
+
+    async def select_assets_from(
+        self,
+        recent: set[UUID],
+        batch_size: int,
+        count: int,
+        album_id: UUID | None,
+    ) -> tuple[Asset, ...]:
         payload = {
             "type": "IMAGE",
-            "visibility": "timeline",
             "withDeleted": False,
             "isOffline": False,
+            "withExif": True,
             "size": min(max(batch_size, count, 1), 1000),
         }
+        if album_id is None:
+            payload["visibility"] = "timeline"
+        else:
+            payload["albumIds"] = [str(album_id)]
         data = await self._json_request("POST", "/api/search/random", json=payload)
         if not isinstance(data, list):
             raise PermanentImmichError("Immich random search returned an incompatible response")
 
         candidates: dict[UUID, Asset] = {}
         for item in data:
-            asset = self._parse_eligible_asset(item)
+            asset = self._parse_eligible_asset(item, require_timeline=album_id is None)
             if asset is not None and asset.id not in recent:
                 candidates[asset.id] = asset
+                self._locations[asset.id] = asset.location
         if not candidates:
             raise AssetUnavailable("Immich returned no eligible new images")
         selected = list(candidates.values())
         random.SystemRandom().shuffle(selected)
         return tuple(selected[:count])
+
+    async def list_albums(self) -> tuple[Album, ...]:
+        data = await self._json_request("GET", "/api/albums")
+        if not isinstance(data, list):
+            raise PermanentImmichError("Immich albums returned an incompatible response")
+        albums: list[Album] = []
+        for value in data:
+            if not isinstance(value, dict):
+                continue
+            try:
+                album_id = UUID(str(value["id"]))
+                name = str(value["albumName"]).strip()
+                count = int(value.get("assetCount", 0))
+            except (KeyError, TypeError, ValueError):
+                continue
+            if name and count >= 0:
+                albums.append(Album(album_id, name, count))
+        return tuple(sorted(albums, key=lambda album: album.name.casefold()))
+
+    async def fetch_location(self, asset_id: UUID) -> str | None:
+        if asset_id in self._locations:
+            return self._locations[asset_id]
+        data = await self._json_request("GET", f"/api/assets/{asset_id}")
+        location = self._parse_location(data)
+        self._locations[asset_id] = location
+        return location
 
     async def validate_access(self) -> None:
         data = await self._json_request(
@@ -106,6 +155,7 @@ class ImmichClient:
                 "visibility": "timeline",
                 "withDeleted": False,
                 "isOffline": False,
+                "withExif": True,
                 "size": 1,
             },
         )
@@ -177,18 +227,30 @@ class ImmichClient:
             raise TransientImmichError(f"Immich request failed ({status})")
 
     @staticmethod
-    def _parse_eligible_asset(value: object) -> Asset | None:
+    def _parse_eligible_asset(value: object, *, require_timeline: bool = True) -> Asset | None:
         if not isinstance(value, dict):
             return None
         if (
             value.get("type") != "IMAGE"
-            or value.get("visibility") != "timeline"
+            or (require_timeline and value.get("visibility") != "timeline")
             or value.get("isArchived") is not False
             or value.get("isTrashed") is not False
             or value.get("isOffline") is not False
         ):
             return None
         try:
-            return Asset(UUID(str(value["id"])))
+            return Asset(UUID(str(value["id"])), ImmichClient._parse_location(value))
         except (KeyError, ValueError):
             return None
+
+    @staticmethod
+    def _parse_location(value: object) -> str | None:
+        if not isinstance(value, dict) or not isinstance(value.get("exifInfo"), dict):
+            return None
+        exif = value["exifInfo"]
+        parts = [
+            item.strip()
+            for item in (exif.get("city"), exif.get("state"))
+            if isinstance(item, str) and item.strip()
+        ]
+        return ", ".join(dict.fromkeys(parts)) or None

@@ -195,13 +195,98 @@ def create_management_app(
             return _error(503, "history_unavailable", "history is unavailable")
         coordinator = supervisor.snapshot.coordinator
         upcoming = coordinator.upcoming_assets if coordinator is not None else ()
+        current_asset = coordinator.current_asset if coordinator is not None else None
+        current_record = (
+            next(
+                (
+                    record
+                    for record in state.records
+                    if record.load_id == coordinator.current_load_id
+                ),
+                None,
+            )
+            if coordinator is not None and coordinator.current_load_id is not None
+            else None
+        )
         return web.json_response(
             {
                 "rotation_enabled": state.rotation_enabled,
-                "records": [_record_json(record) for record in state.records],
+                "current": (
+                    _current_json(current_asset, current_record)
+                    if current_asset is not None
+                    else None
+                ),
+                "records": [
+                    _record_json(record) for record in state.records if record is not current_record
+                ],
                 "upcoming": [_upcoming_json(asset_id) for asset_id in upcoming],
             }
         )
+
+    async def albums(_request: web.Request) -> web.Response:
+        try:
+            items = await supervisor.albums()
+        except ImmichError:
+            return _error(502, "albums_upstream_error", "albums are unavailable")
+        coordinator = supervisor.snapshot.coordinator
+        return web.json_response(
+            {
+                "selected_album_id": (
+                    str(coordinator.selected_album)
+                    if coordinator is not None and coordinator.selected_album is not None
+                    else None
+                ),
+                "albums": [
+                    {"id": str(album.id), "name": album.name, "asset_count": album.asset_count}
+                    for album in items
+                ],
+            }
+        )
+
+    async def source(request: web.Request) -> web.Response:
+        failure = _mutation_failure(request, token, allowed_hosts)
+        if failure is not None:
+            return failure
+        body = await _json_object(request)
+        if isinstance(body, web.Response):
+            return body
+        value = body.get("album_id")
+        try:
+            album_id = None if value is None else UUID(value)
+        except (TypeError, ValueError):
+            return _error(400, "invalid_request", "album_id must be a UUID or null")
+        try:
+            applied = await supervisor.select_source(album_id)
+        except ImmichError:
+            return _error(502, "albums_upstream_error", "albums are unavailable")
+        if not applied:
+            return _error(409, "source_not_applied", "album is unavailable or playback is busy")
+        return web.json_response(
+            {"outcome": "applied", "selected_album_id": str(album_id) if album_id else None}
+        )
+
+    async def seek(request: web.Request) -> web.Response:
+        failure = _mutation_failure(request, token, allowed_hosts)
+        if failure is not None:
+            return failure
+        body = await _json_object(request)
+        if isinstance(body, web.Response):
+            return body
+        request_id = body.get("request_id")
+        target_kind = body.get("target_kind")
+        target_id = body.get("target_id")
+        if (
+            not isinstance(request_id, str)
+            or not request_id.strip()
+            or not isinstance(target_kind, str)
+            or not target_kind.strip()
+            or not isinstance(target_id, str)
+            or not target_id.strip()
+        ):
+            return _error(400, "invalid_request", "request_id and target are required")
+        outcome = await supervisor.seek(target_kind, target_id, request_id)
+        code = 503 if outcome is CommandResult.FAILED else 200
+        return web.json_response({"outcome": outcome.value, "request_id": request_id}, status=code)
 
     async def thumbnail(request: web.Request) -> web.Response:
         try:
@@ -228,6 +313,18 @@ def create_management_app(
             return _error(502, "thumbnail_invalid", "thumbnail is unavailable")
         return web.Response(body=preview.body, content_type=preview.content_type)
 
+    async def current_thumbnail(request: web.Request) -> web.Response:
+        try:
+            asset_id = UUID(request.match_info["asset_id"])
+            preview = await supervisor.current_thumbnail(asset_id)
+        except (ValueError, AssetUnavailable):
+            return _error(404, "thumbnail_unavailable", "thumbnail is unavailable")
+        except ImmichError:
+            return _error(502, "thumbnail_upstream_error", "thumbnail is unavailable")
+        if preview.content_type not in ALLOWED_IMAGE_TYPES:
+            return _error(502, "thumbnail_invalid", "thumbnail is unavailable")
+        return web.Response(body=preview.body, content_type=preview.content_type)
+
     app.router.add_get("/", index)
     app.router.add_get("/app.js", script)
     app.router.add_get("/styles.css", stylesheet)
@@ -237,9 +334,13 @@ def create_management_app(
     app.router.add_post("/api/discovery", discovery)
     app.router.add_post("/api/controls/{command}", control)
     app.router.add_post("/api/reconnect", reconnect)
+    app.router.add_get("/api/albums", albums)
+    app.router.add_post("/api/source", source)
+    app.router.add_post("/api/seek", seek)
     app.router.add_get("/api/history", history)
     app.router.add_get("/api/history/{event_id}/thumbnail", thumbnail)
     app.router.add_get("/api/upcoming/{asset_id}/thumbnail", upcoming_thumbnail)
+    app.router.add_get("/api/current/{asset_id}/thumbnail", current_thumbnail)
     return app
 
 
@@ -383,6 +484,9 @@ def _coordinator_json(snapshot: CoordinatorSnapshot | None) -> dict[str, Any] | 
         "last_display_event_id": (
             snapshot.last_display.event_id if snapshot.last_display is not None else None
         ),
+        "selected_album_id": (
+            str(snapshot.selected_album) if snapshot.selected_album is not None else None
+        ),
     }
 
 
@@ -421,6 +525,15 @@ def _upcoming_json(asset_id: UUID) -> dict[str, str]:
     return {
         "asset_id": value,
         "thumbnail_url": f"/api/upcoming/{value}/thumbnail",
+    }
+
+
+def _current_json(asset_id: UUID, record: DisplayRecord | None) -> dict[str, str | None]:
+    value = str(asset_id)
+    return {
+        "asset_id": value,
+        "confirmed_at": _isoformat(record.confirmed_at) if record is not None else None,
+        "thumbnail_url": f"/api/current/{value}/thumbnail",
     }
 
 

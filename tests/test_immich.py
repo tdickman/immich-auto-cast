@@ -61,6 +61,7 @@ async def test_search_contract_filters_and_preview_authentication(serve_app: Any
         "visibility": "timeline",
         "withDeleted": False,
         "isOffline": False,
+        "withExif": True,
         "size": 50,
     }
 
@@ -134,6 +135,53 @@ async def test_select_assets_returns_unique_non_recent_candidates(serve_app: Any
     assert len(selected) == 11
     assert len({asset.id for asset in selected}) == 11
     assert recent_id not in {asset.id for asset in selected}
+
+
+@pytest.mark.asyncio
+async def test_albums_filter_random_search_and_preserve_location(serve_app: Any) -> None:
+    album_id = UUID(int=99)
+    observed: dict[str, Any] = {}
+
+    async def albums(_request: web.Request) -> web.Response:
+        return web.json_response(
+            [
+                {"id": str(album_id), "albumName": "Trips", "assetCount": 12},
+                {"id": "invalid", "albumName": "Ignored", "assetCount": 1},
+            ]
+        )
+
+    async def search(request: web.Request) -> web.Response:
+        observed["body"] = await request.json()
+        return web.json_response(
+            [
+                eligible(
+                    visibility="archive",
+                    exifInfo={"city": "Portland", "state": "Oregon"},
+                )
+            ]
+        )
+
+    app = web.Application()
+    app.router.add_get("/api/albums", albums)
+    app.router.add_post("/api/search/random", search)
+    server = await serve_app(app)
+    settings = ImmichSettings(str(server.make_url("/")).rstrip("/"), "secret", 2, 1)
+    async with ImmichClient(settings) as client:
+        listed = await client.list_albums()
+        selected = await client.select_assets_from(set(), 20, 1, album_id)
+        cached_location = await client.fetch_location(ASSET_ID)
+
+    assert [(album.name, album.asset_count) for album in listed] == [("Trips", 12)]
+    assert selected[0].location == "Portland, Oregon"
+    assert cached_location == "Portland, Oregon"
+    assert observed["body"] == {
+        "type": "IMAGE",
+        "withDeleted": False,
+        "isOffline": False,
+        "withExif": True,
+        "size": 20,
+        "albumIds": [str(album_id)],
+    }
 
 
 @pytest.mark.asyncio

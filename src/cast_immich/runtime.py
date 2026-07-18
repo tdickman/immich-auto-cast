@@ -27,7 +27,7 @@ from .config import (
 )
 from .coordinator import Command, CommandResult, Coordinator, CoordinatorEvent, CoordinatorSnapshot
 from .history import HistoryState, HistoryStore
-from .immich import AssetUnavailable, ImmichClient, Preview
+from .immich import Album, AssetUnavailable, ImmichClient, Preview
 from .relay import ImageRelay
 
 
@@ -83,6 +83,12 @@ class ComponentGraph(Protocol):
 
     async def command(self, command: Command, request_id: str) -> CommandResult: ...
 
+    async def seek(self, target_kind: str, target_id: str, request_id: str) -> CommandResult: ...
+
+    async def albums(self) -> tuple[Album, ...]: ...
+
+    async def select_source(self, album_id: UUID | None) -> bool: ...
+
     async def reconnect(self) -> None: ...
 
     def transfer_capabilities_to(self, target: ComponentGraph) -> None: ...
@@ -92,6 +98,8 @@ class ComponentGraph(Protocol):
     async def thumbnail(self, event_id: str) -> Preview: ...
 
     async def upcoming_thumbnail(self, asset_id: UUID) -> Preview: ...
+
+    async def current_thumbnail(self, asset_id: UUID) -> Preview: ...
 
     async def close(self) -> None: ...
 
@@ -179,6 +187,31 @@ class ServiceGraph:
             await command_task
         return CommandResult.FAILED
 
+    async def seek(self, target_kind: str, target_id: str, request_id: str) -> CommandResult:
+        coordinator_task = self._coordinator_task
+        if coordinator_task is None or coordinator_task.done():
+            return CommandResult.FAILED
+        seek_task = asyncio.create_task(self._coordinator.seek(target_kind, target_id, request_id))
+        done, _ = await asyncio.wait(
+            {coordinator_task, seek_task},
+            timeout=self._command_timeout,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if seek_task in done:
+            return await seek_task
+        seek_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await seek_task
+        return CommandResult.FAILED
+
+    async def albums(self) -> tuple[Album, ...]:
+        return await self._immich.list_albums()
+
+    async def select_source(self, album_id: UUID | None) -> bool:
+        if album_id is not None and album_id not in {album.id for album in await self.albums()}:
+            return False
+        return await self._coordinator.select_source(album_id)
+
     async def reconnect(self) -> None:
         await self._cast.reconnect()
 
@@ -222,6 +255,11 @@ class ServiceGraph:
     async def upcoming_thumbnail(self, asset_id: UUID) -> Preview:
         if asset_id not in self._coordinator.snapshot.upcoming_assets:
             raise AssetUnavailable("asset is no longer upcoming")
+        return await self._immich.fetch_preview(asset_id, self._thumbnail_max_bytes)
+
+    async def current_thumbnail(self, asset_id: UUID) -> Preview:
+        if asset_id != self._coordinator.snapshot.current_asset:
+            raise AssetUnavailable("asset is no longer current")
         return await self._immich.fetch_preview(asset_id, self._thumbnail_max_bytes)
 
     async def close(self) -> None:
@@ -460,6 +498,24 @@ class RuntimeSupervisor:
     async def stop(self, request_id: str) -> CommandResult:
         return await self.command(Command.STOP, request_id)
 
+    async def seek(self, target_kind: str, target_id: str, request_id: str) -> CommandResult:
+        async with self._lock:
+            if self._graph is None or self._closed:
+                return CommandResult.FAILED
+            return await self._graph.seek(target_kind, target_id, request_id)
+
+    async def albums(self) -> tuple[Album, ...]:
+        async with self._lock:
+            if self._graph is None or self._closed:
+                return ()
+            return await self._graph.albums()
+
+    async def select_source(self, album_id: UUID | None) -> bool:
+        async with self._lock:
+            if self._graph is None or self._closed:
+                return False
+            return await self._graph.select_source(album_id)
+
     async def reconnect(self) -> bool:
         async with self._lock:
             if self._graph is None or self._closed:
@@ -494,6 +550,17 @@ class RuntimeSupervisor:
         try:
             async with self._thumbnail_semaphore:
                 return await graph.upcoming_thumbnail(asset_id)
+        except RuntimeError:
+            raise AssetUnavailable("thumbnail service changed during request") from None
+
+    async def current_thumbnail(self, asset_id: UUID) -> Preview:
+        async with self._lock:
+            if self._graph is None or self._closed:
+                raise AssetUnavailable("thumbnail service is unavailable")
+            graph = self._graph
+        try:
+            async with self._thumbnail_semaphore:
+                return await graph.current_thumbnail(asset_id)
         except RuntimeError:
             raise AssetUnavailable("thumbnail service changed during request") from None
 

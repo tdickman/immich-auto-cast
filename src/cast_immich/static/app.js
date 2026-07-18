@@ -1,6 +1,6 @@
 "use strict";
 
-const state = { csrf: "", revision: 0, config: null, dirty: false, timer: null, gallerySignature: "", pendingCommands: {} };
+const state = { csrf: "", revision: 0, config: null, dirty: false, timer: null, gallerySignature: "", pendingCommands: {}, changingSource: false };
 const form = document.querySelector("#settings-form");
 const toast = document.querySelector("#toast");
 
@@ -61,6 +61,8 @@ function renderStatus(payload) {
   document.querySelector("#next-button").disabled = !owned;
   document.querySelector("#stop-button").disabled = !owned;
   document.querySelector("#reconnect-button").disabled = !active;
+  document.querySelector("#album-select").disabled = !active || state.changingSource;
+  if (!state.changingSource) document.querySelector("#album-select").value = coordinator?.selected_album_id || "";
 }
 
 function setFormValues(values) {
@@ -103,21 +105,34 @@ async function loadHistory() {
   const payload = await request("/api/history");
   document.querySelector("#history-count").textContent = String(payload.records.length);
   document.querySelector("#upcoming-count").textContent = String(payload.upcoming.length);
+  document.querySelector("#current-count").textContent = payload.current ? "1" : "0";
   const signature = JSON.stringify([
+    payload.current?.asset_id,
     payload.records.map(record => [record.event_id, record.confirmed_at]),
     payload.upcoming.map(record => record.asset_id),
   ]);
   if (signature === state.gallerySignature) return;
   state.gallerySignature = signature;
-  renderGallery("#history-list", payload.records, "No confirmed photos yet.", (record, index) => {
+  renderGallery("#current-list", payload.current ? [payload.current] : [], "No photo is currently casting.", record => {
     const figure = document.createElement("figure");
-    figure.className = "photo-record";
-    figure.style.animationDelay = `${index * 45}ms`;
+    figure.className = "photo-record current-record";
+    const image = document.createElement("img");
+    image.src = record.thumbnail_url;
+    image.alt = "Currently displayed Immich photo";
+    const caption = document.createElement("div");
+    caption.className = "photo-caption";
+    caption.textContent = record.confirmed_at ? new Date(record.confirmed_at).toLocaleString() : "NOW CASTING";
+    figure.append(image, caption);
+    return figure;
+  });
+  renderGallery("#history-list", payload.records, "No confirmed photos yet.", (record, index) => {
+    const figure = photoButton("history", record.event_id, index);
     const image = document.createElement("img");
     image.src = record.thumbnail_url;
     image.alt = "Recently displayed Immich photo";
     image.loading = "lazy";
-    const caption = document.createElement("figcaption");
+    const caption = document.createElement("div");
+    caption.className = "photo-caption";
     const time = document.createElement("time");
     time.dateTime = record.confirmed_at;
     time.textContent = new Date(record.confirmed_at).toLocaleString();
@@ -126,20 +141,37 @@ async function loadHistory() {
     return figure;
   });
   renderGallery("#upcoming-list", payload.upcoming, "The next photos will appear when rotation begins.", (record, index) => {
-    const figure = document.createElement("figure");
-    figure.className = "photo-record upcoming-record";
-    figure.style.animationDelay = `${index * 45}ms`;
+    const figure = photoButton("upcoming", record.asset_id, index, "upcoming-record");
     const image = document.createElement("img");
     image.src = record.thumbnail_url;
     image.alt = `Upcoming Immich photo ${index + 1}`;
     image.loading = "lazy";
-    const caption = document.createElement("figcaption");
+    const caption = document.createElement("div");
+    caption.className = "photo-caption";
     const position = document.createElement("strong");
     position.textContent = `NEXT ${String(index + 1).padStart(2, "0")}`;
     caption.append(position);
     figure.append(image, caption);
     return figure;
   });
+}
+
+function photoButton(kind, id, index, extraClass = "") {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `photo-record photo-jump ${extraClass}`.trim();
+  button.style.animationDelay = `${index * 45}ms`;
+  button.setAttribute("aria-label", `Show this ${kind} photo now`);
+  button.addEventListener("click", () => performSeek(kind, id));
+  return button;
+}
+
+async function loadAlbums() {
+  const payload = await request("/api/albums");
+  const select = document.querySelector("#album-select");
+  select.replaceChildren(new Option("Any photo from the timeline", ""));
+  payload.albums.forEach(album => select.add(new Option(`${album.name} (${album.asset_count})`, album.id)));
+  select.value = payload.selected_album_id || "";
 }
 
 function renderGallery(selector, records, emptyMessage, renderRecord) {
@@ -181,6 +213,19 @@ async function performControl(command) {
     await refresh();
   } catch (error) {
     if (error.status) delete state.pendingCommands[command];
+    notify(titleCase(error.message), true);
+    await refresh();
+  }
+}
+
+async function performSeek(targetKind, targetId) {
+  const requestId = crypto.randomUUID();
+  document.querySelectorAll(".photo-jump").forEach(button => { button.disabled = true; });
+  try {
+    const result = await mutate("/api/seek", { request_id: requestId, target_kind: targetKind, target_id: targetId });
+    notify(titleCase(result.outcome));
+    await refresh();
+  } catch (error) {
     notify(titleCase(error.message), true);
     await refresh();
   }
@@ -238,6 +283,23 @@ document.querySelector("#reconnect-button").addEventListener("click", async () =
   catch (error) { notify(error.message, true); }
   finally { button.disabled = false; }
 });
+document.querySelector("#album-select").addEventListener("change", async event => {
+  const select = event.currentTarget;
+  state.changingSource = true;
+  select.disabled = true;
+  try {
+    await mutate("/api/source", { album_id: select.value || null });
+    state.gallerySignature = "";
+    notify(select.value ? `Using ${select.selectedOptions[0].textContent}` : "Using the full timeline");
+    await refresh();
+  } catch (error) {
+    notify(error.message, true);
+    await loadAlbums();
+  } finally {
+    state.changingSource = false;
+    select.disabled = false;
+  }
+});
 document.querySelector("#discover-button").addEventListener("click", async event => {
   const button = event.currentTarget;
   button.disabled = true;
@@ -255,7 +317,7 @@ document.querySelector("#discover-button").addEventListener("click", async event
 });
 
 async function boot() {
-  try { await loadConfig(); await refresh(); }
+  try { await loadConfig(); await Promise.all([loadAlbums(), refresh()]); }
   catch (error) { notify(error.message, true); }
   document.querySelector("#discover-button").click();
   state.timer = window.setInterval(refresh, 3500);
