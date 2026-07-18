@@ -9,6 +9,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import Protocol, cast
 from uuid import UUID
 
@@ -90,8 +91,12 @@ class ImageRelay:
         self._clock = clock
         self._max_tokens = max_tokens
         self._tokens: OrderedDict[str, Capability] = OrderedDict()
-        self._previews: OrderedDict[tuple[UUID, QrPlacement | None], Preview] = OrderedDict()
-        self._preview_tasks: dict[tuple[UUID, QrPlacement | None], asyncio.Task[Preview]] = {}
+        self._previews: OrderedDict[tuple[UUID, QrPlacement | None, str | None], Preview] = (
+            OrderedDict()
+        )
+        self._preview_tasks: dict[
+            tuple[UUID, QrPlacement | None, str | None], asyncio.Task[Preview]
+        ] = {}
         self._dashboard_url = dashboard_url
         self._web_qrs: dict[tuple[float, int], Image.Image] = {}
         self._semaphore = asyncio.Semaphore(settings.max_concurrent)
@@ -140,6 +145,7 @@ class ImageRelay:
         web_qr_opacity: int = 75,
         web_qr_lossless: bool = False,
         web_qr_quiet_zone: int = 4,
+        show_device_time: bool = False,
     ) -> None:
         """Fetch and normalize an image before the receiver needs it."""
         if isinstance(asset, Asset) and asset.media_type is MediaType.VIDEO:
@@ -154,6 +160,7 @@ class ImageRelay:
             web_qr_opacity=web_qr_opacity,
             web_qr_lossless=web_qr_lossless,
             web_qr_quiet_zone=web_qr_quiet_zone,
+            show_device_time=show_device_time,
         )
 
     async def preload_media(
@@ -168,6 +175,7 @@ class ImageRelay:
         web_qr_opacity: int = 75,
         web_qr_lossless: bool = False,
         web_qr_quiet_zone: int = 4,
+        show_device_time: bool = False,
     ) -> None:
         await self.preload(
             asset,
@@ -179,6 +187,7 @@ class ImageRelay:
             web_qr_opacity=web_qr_opacity,
             web_qr_lossless=web_qr_lossless,
             web_qr_quiet_zone=web_qr_quiet_zone,
+            show_device_time=show_device_time,
         )
 
     async def mint(
@@ -193,6 +202,7 @@ class ImageRelay:
         web_qr_opacity: int = 75,
         web_qr_lossless: bool = False,
         web_qr_quiet_zone: int = 4,
+        show_device_time: bool = False,
     ) -> tuple[str, str]:
         if self._closed:
             raise AssetUnavailable("media relay is closed")
@@ -209,6 +219,7 @@ class ImageRelay:
                 web_qr_opacity=web_qr_opacity,
                 web_qr_lossless=web_qr_lossless,
                 web_qr_quiet_zone=web_qr_quiet_zone,
+                show_device_time=show_device_time,
             )
             if media.media_type is MediaType.IMAGE
             else None
@@ -239,6 +250,7 @@ class ImageRelay:
         web_qr_opacity: int = 75,
         web_qr_lossless: bool = False,
         web_qr_quiet_zone: int = 4,
+        show_device_time: bool = False,
     ) -> tuple[str, str]:
         return await self.mint(
             asset,
@@ -250,6 +262,7 @@ class ImageRelay:
             web_qr_opacity=web_qr_opacity,
             web_qr_lossless=web_qr_lossless,
             web_qr_quiet_zone=web_qr_quiet_zone,
+            show_device_time=show_device_time,
         )
 
     async def _get_preview(
@@ -264,6 +277,7 @@ class ImageRelay:
         web_qr_opacity: int = 75,
         web_qr_lossless: bool = False,
         web_qr_quiet_zone: int = 4,
+        show_device_time: bool = False,
     ) -> Preview:
         if self._closed:
             raise AssetUnavailable("image relay is closed")
@@ -280,7 +294,8 @@ class ImageRelay:
             if show_web_qr
             else None
         )
-        key = (asset_id, placement)
+        device_time = datetime.now().astimezone().strftime("%H:%M") if show_device_time else None
+        key = (asset_id, placement, device_time)
         preview = self._previews.get(key)
         if preview is not None:
             self._previews.move_to_end(key)
@@ -288,7 +303,7 @@ class ImageRelay:
         task = self._preview_tasks.get(key)
         if task is None:
             task = asyncio.create_task(
-                self._fetch_preview(asset_id, placement), name="image-preview-fetch"
+                self._fetch_preview(asset_id, placement, device_time), name="image-preview-fetch"
             )
             self._preview_tasks[key] = task
             self._active_mints.add(task)
@@ -304,7 +319,9 @@ class ImageRelay:
             self._previews.popitem(last=False)
         return preview
 
-    async def _fetch_preview(self, asset_id: UUID, placement: QrPlacement | None) -> Preview:
+    async def _fetch_preview(
+        self, asset_id: UUID, placement: QrPlacement | None, device_time: str | None
+    ) -> Preview:
         async with self._semaphore:
             preview = await self._source.fetch_preview(asset_id, self._settings.max_response_bytes)
             if preview.content_type not in ALLOWED_IMAGE_TYPES:
@@ -330,7 +347,7 @@ class ImageRelay:
                 else None
             )
             return await asyncio.to_thread(
-                _normalize_preview, preview, location, date, qr, placement
+                _normalize_preview, preview, location, date, qr, placement, device_time
             )
 
     def _web_qr(self, size: float, quiet_zone: int) -> Image.Image | None:
@@ -460,6 +477,7 @@ def _normalize_preview(
     date: str | None = None,
     web_qr: Image.Image | None = None,
     qr_placement: QrPlacement | None = None,
+    device_time: str | None = None,
 ) -> Preview:
     try:
         with Image.open(io.BytesIO(preview.body)) as source:
@@ -478,8 +496,8 @@ def _normalize_preview(
                 ((canvas.width - image.width) // 2, (canvas.height - image.height) // 2),
             )
             image = canvas
-            if location or date:
-                _draw_metadata(image, location, date)
+            if location or date or device_time:
+                _draw_metadata(image, location, date, device_time)
             if web_qr is not None and qr_placement is not None:
                 _draw_web_qr(image, web_qr, qr_placement)
             output = io.BytesIO()
@@ -494,12 +512,19 @@ def _normalize_preview(
     return Preview(output.getvalue(), content_type)
 
 
-def _draw_metadata(image: Image.Image, location: str | None, date: str | None) -> None:
+def _draw_metadata(
+    image: Image.Image,
+    location: str | None,
+    date: str | None,
+    device_time: str | None = None,
+) -> None:
     labels = [value.strip()[:120] for value in (location, date) if value and value.strip()]
-    if not labels:
+    time_label = device_time.strip()[:40] if device_time and device_time.strip() else None
+    if not labels and time_label is None:
         return
     draw = ImageDraw.Draw(image, "RGBA")
     font = ImageFont.load_default(size=max(12, min(image.size) // 28))
+    time_font = ImageFont.load_default(size=max(15, min(image.size) // 22))
     padding = max(6, min(image.size) // 80)
     margin = max(12, min(image.size) // 18)
     available_width = max(1, image.width - (margin + padding) * 2)
@@ -507,26 +532,46 @@ def _draw_metadata(image: Image.Image, location: str | None, date: str | None) -
         while len(label) > 4 and draw.textlength(label, font=font) > available_width:
             label = f"{label[:-4].rstrip()}..."
         labels[index] = label
-    label = "\n".join(labels)
-    spacing = max(2, padding // 2)
-    box = draw.multiline_textbbox((0, 0), label, font=font, spacing=spacing, align="right")
-    width, height = box[2] - box[0], box[3] - box[1]
     right, bottom = image.width - margin, image.height - margin
-    background = (
-        right - width - padding * 2,
-        bottom - height - padding * 2,
-        right,
-        bottom,
-    )
-    draw.rounded_rectangle(background, radius=padding, fill=(0, 0, 0, 155))
-    draw.multiline_text(
-        (right - padding - width, bottom - padding - height - box[1]),
-        label,
-        font=font,
-        fill=(255, 255, 255, 235),
-        spacing=spacing,
-        align="right",
-    )
+    metadata_top: float = bottom
+    if labels:
+        label = "\n".join(labels)
+        spacing = max(2, padding // 2)
+        box = draw.multiline_textbbox((0, 0), label, font=font, spacing=spacing, align="right")
+        width, height = box[2] - box[0], box[3] - box[1]
+        metadata_top = bottom - height - padding * 2
+        draw.rounded_rectangle(
+            (right - width - padding * 2, metadata_top, right, bottom),
+            radius=padding,
+            fill=(0, 0, 0, 155),
+        )
+        draw.multiline_text(
+            (right - padding - width, bottom - padding - height - box[1]),
+            label,
+            font=font,
+            fill=(255, 255, 255, 235),
+            spacing=spacing,
+            align="right",
+        )
+    if time_label is not None:
+        while len(time_label) > 4 and draw.textlength(time_label, font=time_font) > available_width:
+            time_label = f"{time_label[:-4].rstrip()}..."
+        box = draw.textbbox((0, 0), time_label, font=time_font)
+        width, height = box[2] - box[0], box[3] - box[1]
+        gap = max(4, padding // 2) if labels else 0
+        time_bottom = metadata_top - gap
+        time_top = time_bottom - height - padding * 2
+        draw.rounded_rectangle(
+            (right - width - padding * 3, time_top, right, time_bottom),
+            radius=max(padding, (time_bottom - time_top) // 2),
+            fill=(238, 174, 74, 225),
+        )
+        draw.text(
+            (right - padding * 3 // 2 - width, time_top + padding - box[1]),
+            time_label,
+            font=time_font,
+            fill=(24, 21, 17, 255),
+        )
 
 
 def _draw_location(image: Image.Image, location: str) -> None:

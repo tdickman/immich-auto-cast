@@ -302,6 +302,7 @@ async def test_dashboard_assets_expose_complete_operator_interface(
     assert 'else if (kind === "video") applySource' not in javascript
     assert 'outputField("Maximum video seconds", "video_max_duration"' in javascript
     assert 'outputField("Mute videos", "video_muted"' in javascript
+    assert 'outputField("Show device time", "show_device_time"' in javascript
     assert 'outputField("Show web interface QR code", "show_web_qr"' in javascript
     assert 'outputField("QR code size (1-6)", "web_qr_size"' in javascript
     assert 'max: "6", step: "0.25"' in javascript

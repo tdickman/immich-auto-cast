@@ -92,6 +92,7 @@ class Relay(Protocol):
         web_qr_opacity: int = 75,
         web_qr_lossless: bool = False,
         web_qr_quiet_zone: int = 4,
+        show_device_time: bool = False,
     ) -> None: ...
 
     async def mint_media(
@@ -106,6 +107,7 @@ class Relay(Protocol):
         web_qr_opacity: int = 75,
         web_qr_lossless: bool = False,
         web_qr_quiet_zone: int = 4,
+        show_device_time: bool = False,
     ) -> tuple[str, str]: ...
 
     def confirm(self, url: str) -> None: ...
@@ -1010,10 +1012,10 @@ class Coordinator:
         try:
             preload_media = getattr(self._relay, "preload_media", None)
             if preload_media is not None:
-                if self._settings.show_web_qr:
+                if self._settings.show_web_qr or self._settings.show_device_time:
                     await preload_media(
                         asset,
-                        show_web_qr=True,
+                        show_web_qr=self._settings.show_web_qr,
                         web_qr_size=self._settings.web_qr_size,
                         web_qr_position=self._settings.web_qr_position,
                         web_qr_inset_x=self._settings.web_qr_inset_x,
@@ -1021,6 +1023,7 @@ class Coordinator:
                         web_qr_opacity=self._settings.web_qr_opacity,
                         web_qr_lossless=self._settings.web_qr_lossless,
                         web_qr_quiet_zone=self._settings.web_qr_quiet_zone,
+                        show_device_time=self._settings.show_device_time,
                     )
                 else:
                     await preload_media(asset)
@@ -1034,10 +1037,10 @@ class Coordinator:
     async def _mint(self, asset: Asset) -> tuple[str, str]:
         mint_media = getattr(self._relay, "mint_media", None)
         if mint_media is not None:
-            if self._settings.show_web_qr:
+            if self._settings.show_web_qr or self._settings.show_device_time:
                 url, content_type = await mint_media(
                     asset,
-                    show_web_qr=True,
+                    show_web_qr=self._settings.show_web_qr,
                     web_qr_size=self._settings.web_qr_size,
                     web_qr_position=self._settings.web_qr_position,
                     web_qr_inset_x=self._settings.web_qr_inset_x,
@@ -1045,6 +1048,7 @@ class Coordinator:
                     web_qr_opacity=self._settings.web_qr_opacity,
                     web_qr_lossless=self._settings.web_qr_lossless,
                     web_qr_quiet_zone=self._settings.web_qr_quiet_zone,
+                    show_device_time=self._settings.show_device_time,
                 )
             else:
                 url, content_type = await mint_media(asset)

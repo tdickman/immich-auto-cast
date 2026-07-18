@@ -581,7 +581,7 @@ function outputField(labelText, field, value, options = {}) {
       ["Top left", "top-left"], ["Top right", "top-right"],
     ]) control.add(new Option(label, position));
     control.value = value || "bottom-left";
-  } else if (["video_muted", "show_web_qr", "web_qr_lossless"].includes(field)) {
+  } else if (["video_muted", "show_web_qr", "web_qr_lossless", "show_device_time"].includes(field)) {
     control = document.createElement("input");
     control.type = "checkbox";
     control.checked = value ?? field === "video_muted";
@@ -636,6 +636,7 @@ function makeOutputSettingsRow(output) {
     outputField("Autocast idle delay", "autocast_delay", output.autocast_delay),
     outputField("Maximum video seconds", "video_max_duration", output.video_max_duration),
     outputField("Mute videos", "video_muted", output.video_muted),
+    outputField("Show device time", "show_device_time", output.show_device_time),
     outputField("Show web interface QR code", "show_web_qr", output.show_web_qr),
     outputField("QR code size (1-6)", "web_qr_size", output.web_qr_size, { min: "1", max: "6", step: "0.25" }),
     outputField("QR corner", "web_qr_position", output.web_qr_position),
@@ -686,6 +687,7 @@ function outputFromTemplate(template, { id, name, uuid }) {
     autocast_delay: template.autocast_delay ?? 30,
     video_max_duration: template.video_max_duration ?? 30,
     video_muted: template.video_muted ?? true,
+    show_device_time: template.show_device_time ?? false,
     show_web_qr: template.show_web_qr ?? false,
     web_qr_size: template.web_qr_size ?? 2,
     web_qr_position: template.web_qr_position ?? "bottom-left",

@@ -172,6 +172,7 @@ async def test_qr_placement_is_forwarded_to_media_relay() -> None:
         15,
         25,
         50,
+        show_device_time=True,
         show_web_qr=True,
         web_qr_size=3,
         web_qr_position="top-right",
@@ -188,6 +189,7 @@ async def test_qr_placement_is_forwarded_to_media_relay() -> None:
     await coordinator._mint(Asset(ASSET_ID))
 
     assert observed == {
+        "show_device_time": True,
         "show_web_qr": True,
         "web_qr_size": 3,
         "web_qr_position": "top-right",

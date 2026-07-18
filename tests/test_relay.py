@@ -34,6 +34,27 @@ def test_metadata_stays_inside_title_safe_right_margin() -> None:
     assert bounds[2] <= image.width - min(image.size) // 20 + 1
 
 
+def test_device_time_is_an_accent_badge_above_metadata() -> None:
+    original = Image.new("RGB", (1280, 720), "black")
+    plain = original.copy()
+    timed = original.copy()
+
+    _draw_metadata(plain, "Portland, Oregon", "July 17, 2026")
+    _draw_metadata(timed, "Portland, Oregon", "July 17, 2026", "21:41")
+
+    plain_bounds = ImageChops.difference(original, plain).getbbox()
+    timed_bounds = ImageChops.difference(original, timed).getbbox()
+    assert plain_bounds is not None
+    assert timed_bounds is not None
+    assert timed_bounds[1] < plain_bounds[1]
+    assert any(
+        red > green > blue and red > 100
+        for red, green, blue in timed.crop(
+            (900, timed_bounds[1], 1280, plain_bounds[1])
+        ).get_flattened_data()
+    )
+
+
 def test_web_qr_keeps_standard_polarity_while_surround_adapts() -> None:
     qr = _make_qr("http://192.168.1.5:8080/")
     dark = Image.new("RGB", (1280, 720), (40, 40, 40))

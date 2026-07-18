@@ -57,6 +57,7 @@ def test_loads_normalized_settings_and_environment_secret(tmp_path: Path) -> Non
     assert settings.outputs[0].rotation.web_qr_opacity == 75
     assert settings.outputs[0].rotation.web_qr_lossless is False
     assert settings.outputs[0].rotation.web_qr_quiet_zone == 4
+    assert settings.outputs[0].rotation.show_device_time is False
 
 
 def test_rejects_non_boolean_video_muting(tmp_path: Path) -> None:
@@ -223,6 +224,7 @@ def test_editable_settings_round_trip_every_value_and_mask_key(tmp_path: Path) -
         cooldown=12.0,
         recent_history=17,
         candidate_batch=31,
+        show_device_time=True,
         show_web_qr=True,
         web_qr_size=3.5,
         web_qr_position="top-right",
@@ -243,6 +245,8 @@ def test_editable_settings_round_trip_every_value_and_mask_key(tmp_path: Path) -
     assert reloaded.settings.immich.api_key == "new-origin-secret"
     assert reloaded.settings.service.log_level == "DEBUG"
     assert reloaded.settings.outputs[0].rotation.show_web_qr is True
+    assert reloaded.settings.outputs[0].rotation.show_device_time is True
+    assert reloaded.form_values["outputs"][0]["show_device_time"] is True
     assert reloaded.form_values["outputs"][0]["show_web_qr"] is True
     assert reloaded.settings.outputs[0].rotation.web_qr_size == 3.5
     assert reloaded.settings.outputs[0].rotation.web_qr_position == "top-right"
@@ -252,6 +256,7 @@ def test_editable_settings_round_trip_every_value_and_mask_key(tmp_path: Path) -
     assert reloaded.settings.outputs[0].rotation.web_qr_lossless is True
     assert reloaded.settings.outputs[0].rotation.web_qr_quiet_zone == 0
     assert "show_web_qr = true" in path.read_text(encoding="utf-8")
+    assert "show_device_time = true" in path.read_text(encoding="utf-8")
     assert "web_qr_size = 3.5" in path.read_text(encoding="utf-8")
     assert 'web_qr_position = "top-right"' in path.read_text(encoding="utf-8")
     assert "web_qr_opacity = 60" in path.read_text(encoding="utf-8")

@@ -85,6 +85,7 @@ class RotationSettings:
     web_qr_opacity: int = 75
     web_qr_lossless: bool = False
     web_qr_quiet_zone: int = 4
+    show_device_time: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,6 +170,7 @@ def default_form_values() -> dict[str, Any]:
                 "web_qr_opacity": 75,
                 "web_qr_lossless": False,
                 "web_qr_quiet_zone": 4,
+                "show_device_time": False,
             }
         ],
         "relay": {
@@ -429,6 +431,7 @@ def _parse_candidate(
                     web_qr_opacity,
                     _boolean(output.get("web_qr_lossless", False), f"{section}.web_qr_lossless"),
                     web_qr_quiet_zone,
+                    _boolean(output.get("show_device_time", False), f"{section}.show_device_time"),
                 ),
             )
         )
@@ -511,6 +514,7 @@ def _form_values(settings: Settings, path: Path) -> dict[str, Any]:
                 "web_qr_opacity": output.rotation.web_qr_opacity,
                 "web_qr_lossless": output.rotation.web_qr_lossless,
                 "web_qr_quiet_zone": output.rotation.web_qr_quiet_zone,
+                "show_device_time": output.rotation.show_device_time,
             }
             for output in settings.outputs
         ],
@@ -603,6 +607,7 @@ def _serialize_configuration(
         "web_qr_opacity",
         "web_qr_lossless",
         "web_qr_quiet_zone",
+        "show_device_time",
     )
     for output in values["outputs"]:
         lines.append("[[outputs]]")
