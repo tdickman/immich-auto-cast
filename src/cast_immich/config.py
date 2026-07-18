@@ -83,6 +83,7 @@ class RotationSettings:
     web_qr_inset_x: int = 36
     web_qr_inset_y: int = 36
     web_qr_opacity: int = 75
+    web_qr_lossless: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,6 +166,7 @@ def default_form_values() -> dict[str, Any]:
                 "web_qr_inset_x": 36,
                 "web_qr_inset_y": 36,
                 "web_qr_opacity": 75,
+                "web_qr_lossless": False,
             }
         ],
         "relay": {
@@ -416,6 +418,7 @@ def _parse_candidate(
                     web_qr_insets[0],
                     web_qr_insets[1],
                     web_qr_opacity,
+                    _boolean(output.get("web_qr_lossless", False), f"{section}.web_qr_lossless"),
                 ),
             )
         )
@@ -496,6 +499,7 @@ def _form_values(settings: Settings, path: Path) -> dict[str, Any]:
                 "web_qr_inset_x": output.rotation.web_qr_inset_x,
                 "web_qr_inset_y": output.rotation.web_qr_inset_y,
                 "web_qr_opacity": output.rotation.web_qr_opacity,
+                "web_qr_lossless": output.rotation.web_qr_lossless,
             }
             for output in settings.outputs
         ],
@@ -586,6 +590,7 @@ def _serialize_configuration(
         "web_qr_inset_x",
         "web_qr_inset_y",
         "web_qr_opacity",
+        "web_qr_lossless",
     )
     for output in values["outputs"]:
         lines.append("[[outputs]]")

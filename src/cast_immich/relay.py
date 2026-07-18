@@ -68,9 +68,10 @@ class QrPlacement:
     inset_x: int
     inset_y: int
     opacity: int
+    lossless: bool
 
 
-DEFAULT_QR_PLACEMENT = QrPlacement(2, "bottom-left", 36, 36, 75)
+DEFAULT_QR_PLACEMENT = QrPlacement(2, "bottom-left", 36, 36, 75, False)
 
 
 class ImageRelay:
@@ -136,6 +137,7 @@ class ImageRelay:
         web_qr_inset_x: int = 36,
         web_qr_inset_y: int = 36,
         web_qr_opacity: int = 75,
+        web_qr_lossless: bool = False,
     ) -> None:
         """Fetch and normalize an image before the receiver needs it."""
         if isinstance(asset, Asset) and asset.media_type is MediaType.VIDEO:
@@ -148,6 +150,7 @@ class ImageRelay:
             web_qr_inset_x=web_qr_inset_x,
             web_qr_inset_y=web_qr_inset_y,
             web_qr_opacity=web_qr_opacity,
+            web_qr_lossless=web_qr_lossless,
         )
 
     async def preload_media(
@@ -160,6 +163,7 @@ class ImageRelay:
         web_qr_inset_x: int = 36,
         web_qr_inset_y: int = 36,
         web_qr_opacity: int = 75,
+        web_qr_lossless: bool = False,
     ) -> None:
         await self.preload(
             asset,
@@ -169,6 +173,7 @@ class ImageRelay:
             web_qr_inset_x=web_qr_inset_x,
             web_qr_inset_y=web_qr_inset_y,
             web_qr_opacity=web_qr_opacity,
+            web_qr_lossless=web_qr_lossless,
         )
 
     async def mint(
@@ -181,6 +186,7 @@ class ImageRelay:
         web_qr_inset_x: int = 36,
         web_qr_inset_y: int = 36,
         web_qr_opacity: int = 75,
+        web_qr_lossless: bool = False,
     ) -> tuple[str, str]:
         if self._closed:
             raise AssetUnavailable("media relay is closed")
@@ -195,6 +201,7 @@ class ImageRelay:
                 web_qr_inset_x=web_qr_inset_x,
                 web_qr_inset_y=web_qr_inset_y,
                 web_qr_opacity=web_qr_opacity,
+                web_qr_lossless=web_qr_lossless,
             )
             if media.media_type is MediaType.IMAGE
             else None
@@ -223,6 +230,7 @@ class ImageRelay:
         web_qr_inset_x: int = 36,
         web_qr_inset_y: int = 36,
         web_qr_opacity: int = 75,
+        web_qr_lossless: bool = False,
     ) -> tuple[str, str]:
         return await self.mint(
             asset,
@@ -232,6 +240,7 @@ class ImageRelay:
             web_qr_inset_x=web_qr_inset_x,
             web_qr_inset_y=web_qr_inset_y,
             web_qr_opacity=web_qr_opacity,
+            web_qr_lossless=web_qr_lossless,
         )
 
     async def _get_preview(
@@ -244,6 +253,7 @@ class ImageRelay:
         web_qr_inset_x: int = 36,
         web_qr_inset_y: int = 36,
         web_qr_opacity: int = 75,
+        web_qr_lossless: bool = False,
     ) -> Preview:
         if self._closed:
             raise AssetUnavailable("image relay is closed")
@@ -254,6 +264,7 @@ class ImageRelay:
                 web_qr_inset_x,
                 web_qr_inset_y,
                 web_qr_opacity,
+                web_qr_lossless,
             )
             if show_web_qr
             else None
@@ -456,10 +467,15 @@ def _normalize_preview(
             if web_qr is not None and qr_placement is not None:
                 _draw_web_qr(image, web_qr, qr_placement)
             output = io.BytesIO()
-            image.save(output, format="JPEG", quality=90, optimize=True)
+            if qr_placement is not None and qr_placement.lossless:
+                image.save(output, format="PNG", optimize=True)
+                content_type = "image/png"
+            else:
+                image.save(output, format="JPEG", quality=90, optimize=True)
+                content_type = "image/jpeg"
     except (OSError, UnidentifiedImageError):
         raise AssetUnavailable("asset preview is not a valid image") from None
-    return Preview(output.getvalue(), "image/jpeg")
+    return Preview(output.getvalue(), content_type)
 
 
 def _draw_metadata(image: Image.Image, location: str | None, date: str | None) -> None:

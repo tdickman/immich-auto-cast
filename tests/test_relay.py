@@ -67,7 +67,7 @@ def test_web_qr_uses_corner_and_exact_insets() -> None:
     image = Image.new("RGB", (1280, 720), (220, 220, 220))
     original = image.copy()
 
-    _draw_web_qr(image, qr, QrPlacement(2, "top-right", 24, 18, 75))
+    _draw_web_qr(image, qr, QrPlacement(2, "top-right", 24, 18, 75, False))
 
     bounds = ImageChops.difference(original, image).getbbox()
     assert bounds is not None
@@ -82,8 +82,8 @@ def test_web_qr_opacity_dims_the_badge() -> None:
     dimmed = original.copy()
     opaque = original.copy()
 
-    _draw_web_qr(dimmed, qr, QrPlacement(1, "bottom-left", 36, 36, 50))
-    _draw_web_qr(opaque, qr, QrPlacement(1, "bottom-left", 36, 36, 100))
+    _draw_web_qr(dimmed, qr, QrPlacement(1, "bottom-left", 36, 36, 50, False))
+    _draw_web_qr(opaque, qr, QrPlacement(1, "bottom-left", 36, 36, 100, False))
 
     padding = max(2, qr.width // 12)
     top = dimmed.height - qr.height - padding * 2 - 36
@@ -106,6 +106,24 @@ def test_web_qr_supports_crisp_fractional_scaling() -> None:
 
     assert small.width < fractional.width < large.width
     assert set(fractional.get_flattened_data()) == {(0, 0, 0), (255, 255, 255)}
+
+
+@pytest.mark.asyncio
+async def test_web_qr_can_use_optional_lossless_png() -> None:
+    relay = ImageRelay(
+        settings(),
+        Source(Preview(image_bytes((640, 360)), "image/png")),
+        dashboard_url="http://192.168.1.5:8080/",
+    )
+
+    _, jpeg_type = await relay.mint(ASSET_ID, show_web_qr=True)
+    _, png_type = await relay.mint(ASSET_ID, show_web_qr=True, web_qr_lossless=True)
+
+    jpeg_preview, png_preview = [capability.preview for capability in relay._tokens.values()]
+    assert jpeg_type == jpeg_preview.content_type == "image/jpeg"
+    assert png_type == png_preview.content_type == "image/png"
+    with Image.open(io.BytesIO(png_preview.body)) as image:
+        assert image.format == "PNG"
 
 
 class Source:

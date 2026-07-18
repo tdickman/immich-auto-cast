@@ -581,14 +581,10 @@ function outputField(labelText, field, value, options = {}) {
       ["Top left", "top-left"], ["Top right", "top-right"],
     ]) control.add(new Option(label, position));
     control.value = value || "bottom-left";
-  } else if (field === "video_muted") {
+  } else if (["video_muted", "show_web_qr", "web_qr_lossless"].includes(field)) {
     control = document.createElement("input");
     control.type = "checkbox";
-    control.checked = value ?? true;
-  } else if (field === "show_web_qr") {
-    control = document.createElement("input");
-    control.type = "checkbox";
-    control.checked = value ?? false;
+    control.checked = value ?? field === "video_muted";
   } else {
     control = document.createElement("input");
     if (outputNumberFields.has(field)) {
@@ -646,10 +642,11 @@ function makeOutputSettingsRow(output) {
     outputField("Horizontal inset", "web_qr_inset_x", output.web_qr_inset_x, { min: "0", max: "640", step: "1" }),
     outputField("Vertical inset", "web_qr_inset_y", output.web_qr_inset_y, { min: "0", max: "360", step: "1" }),
     outputField("QR surround opacity (%)", "web_qr_opacity", output.web_qr_opacity, { min: "50", max: "100", step: "1" }),
+    outputField("Use lossless PNG for QR", "web_qr_lossless", output.web_qr_lossless),
   );
   const qrHint = document.createElement("p");
   qrHint.className = "field-hint qr-placement-hint";
-  qrHint.textContent = "Save changes to reload the current TV image with the new QR placement.";
+  qrHint.textContent = "Lossless PNG sharpens the QR but uses more bandwidth. Save changes to reload the current TV image.";
   fields.append(qrHint);
   advanced.append(summary, fields);
   row.append(heading, basics, advanced);
@@ -694,6 +691,7 @@ function outputFromTemplate(template, { id, name, uuid }) {
     web_qr_inset_x: template.web_qr_inset_x ?? 36,
     web_qr_inset_y: template.web_qr_inset_y ?? 36,
     web_qr_opacity: template.web_qr_opacity ?? 75,
+    web_qr_lossless: template.web_qr_lossless ?? false,
   };
 }
 
