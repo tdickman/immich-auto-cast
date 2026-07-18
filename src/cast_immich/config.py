@@ -374,9 +374,9 @@ def _parse_candidate(
         if (
             isinstance(web_qr_opacity, bool)
             or not isinstance(web_qr_opacity, int)
-            or not 50 <= web_qr_opacity <= 100
+            or not 0 <= web_qr_opacity <= 100
         ):
-            _fail(f"{section}.web_qr_opacity must be between 50 and 100")
+            _fail(f"{section}.web_qr_opacity must be between 0 and 100")
         outputs.append(
             OutputSettings(
                 output_id,

@@ -641,7 +641,7 @@ function makeOutputSettingsRow(output) {
     outputField("QR corner", "web_qr_position", output.web_qr_position),
     outputField("Horizontal inset", "web_qr_inset_x", output.web_qr_inset_x, { min: "0", max: "640", step: "1" }),
     outputField("Vertical inset", "web_qr_inset_y", output.web_qr_inset_y, { min: "0", max: "360", step: "1" }),
-    outputField("QR surround opacity (%)", "web_qr_opacity", output.web_qr_opacity, { min: "50", max: "100", step: "1" }),
+    outputField("QR surround opacity (%)", "web_qr_opacity", output.web_qr_opacity, { min: "0", max: "100", step: "1" }),
     outputField("Use lossless PNG for QR", "web_qr_lossless", output.web_qr_lossless),
   );
   const qrHint = document.createElement("p");

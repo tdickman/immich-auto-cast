@@ -108,7 +108,7 @@ def test_rejects_invalid_web_qr_placement(
         load_settings(path)
 
 
-@pytest.mark.parametrize("opacity", [49, 101, 75.5])
+@pytest.mark.parametrize("opacity", [-1, 101, 75.5])
 def test_rejects_invalid_web_qr_opacity(tmp_path: Path, opacity: int | float) -> None:
     path = tmp_path / "config.toml"
     path.write_text(

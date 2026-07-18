@@ -93,6 +93,21 @@ def test_web_qr_opacity_dims_the_badge() -> None:
     assert opaque.getpixel((36 + padding, top + padding)) == (255, 255, 255)
 
 
+def test_zero_opacity_hides_only_the_qr_surround() -> None:
+    qr = _make_qr("http://192.168.1.5:8080/")
+    original = Image.new("RGB", (1280, 720), (40, 40, 40))
+    image = original.copy()
+
+    _draw_web_qr(image, qr, QrPlacement(2, "bottom-left", 36, 36, 0, False))
+
+    padding = max(2, qr.width // 12)
+    top = image.height - qr.height - padding * 2 - 36
+    assert image.getpixel((37, top + qr.height // 2)) == original.getpixel(
+        (37, top + qr.height // 2)
+    )
+    assert image.getpixel((36 + padding, top + padding)) == (255, 255, 255)
+
+
 def test_web_qr_accepts_authenticated_dashboard_url() -> None:
     qr = _make_qr("http://192.168.1.5:8080/?password=random-secret")
 
