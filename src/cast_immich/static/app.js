@@ -1,6 +1,6 @@
 "use strict";
 
-const state = { csrf: "", revision: 0, config: null, dirty: false, timer: null, countdownTimer: null, gallerySignature: "", pendingCommands: {}, changingSource: false, pendingSourceKind: null, autocastEnabled: true, autocastDeadline: null, thumbnailCache: new Map(), thumbnailAssetIds: new Set() };
+const state = { csrf: "", revision: 0, config: null, dirty: false, timer: null, countdownTimer: null, gallerySignature: "", pendingCommands: {}, changingSource: false, pendingSourceKind: null, searchQueryDirty: false, autocastEnabled: true, autocastDeadline: null, thumbnailCache: new Map(), thumbnailAssetIds: new Set() };
 const form = document.querySelector("#settings-form");
 const toast = document.querySelector("#toast");
 
@@ -95,7 +95,10 @@ function renderStatus(payload) {
     document.querySelector("#source-kind").value = payload.source.kind;
     document.querySelector("#album-select").value = payload.source.kind === "album" ? payload.source.id : "";
     document.querySelector("#person-select").value = payload.source.kind === "person" ? payload.source.id : "";
-    if (payload.source.kind === "search") document.querySelector("#search-query").value = payload.source.query || "";
+    const searchInput = document.querySelector("#search-query");
+    if (payload.source.kind === "search" && !state.searchQueryDirty && document.activeElement !== searchInput) {
+      searchInput.value = payload.source.query || "";
+    }
     showSourceControl(payload.source.kind);
   }
 }
@@ -286,6 +289,7 @@ async function applySource(source, message) {
   state.changingSource = true;
   try {
     await mutate("/api/source", source);
+    if (source.kind === "search") state.searchQueryDirty = false;
     state.pendingSourceKind = null;
     state.gallerySignature = "";
     notify(message);
@@ -417,6 +421,9 @@ document.querySelector("#search-source").addEventListener("submit", event => {
   event.preventDefault();
   const query = document.querySelector("#search-query").value.trim();
   if (query) applySource({ kind: "search", query }, `Searching for “${query}”`);
+});
+document.querySelector("#search-query").addEventListener("input", () => {
+  state.searchQueryDirty = true;
 });
 document.querySelector("#discover-button").addEventListener("click", async event => {
   const button = event.currentTarget;

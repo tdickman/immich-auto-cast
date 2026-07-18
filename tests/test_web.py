@@ -179,6 +179,8 @@ async def test_dashboard_assets_expose_complete_operator_interface(
     assert "Reconnect" not in html
     assert "Stop cast" not in html
     assert 'id="autocast-status"' in html
+    assert "searchQueryDirty" in javascript
+    assert "document.activeElement !== searchInput" in javascript
     assert 'id="history-list"' in html
     assert 'id="current-list"' in html
     assert 'id="upcoming-list"' in html

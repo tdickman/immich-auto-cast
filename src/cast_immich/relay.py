@@ -207,9 +207,18 @@ def _normalize_preview(
             if source.width * source.height > MAX_IMAGE_PIXELS:
                 raise AssetUnavailable("asset preview dimensions exceed the safety limit")
             image = ImageOps.exif_transpose(source)
-            image.thumbnail(MAX_CAST_SIZE, Image.Resampling.LANCZOS)
             if image.mode != "RGB":
                 image = image.convert("RGB")
+            scale = min(MAX_CAST_SIZE[0] / image.width, MAX_CAST_SIZE[1] / image.height)
+            size = (max(1, round(image.width * scale)), max(1, round(image.height * scale)))
+            if image.size != size:
+                image = image.resize(size, Image.Resampling.LANCZOS)
+            canvas = Image.new("RGB", MAX_CAST_SIZE, "black")
+            canvas.paste(
+                image,
+                ((canvas.width - image.width) // 2, (canvas.height - image.height) // 2),
+            )
+            image = canvas
             if location or date:
                 _draw_metadata(image, location, date)
             output = io.BytesIO()

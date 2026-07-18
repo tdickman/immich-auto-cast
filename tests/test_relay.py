@@ -67,8 +67,10 @@ async def test_preview_is_resized_to_cast_display_limit() -> None:
 
     capability = next(iter(relay._tokens.values()))
     with Image.open(io.BytesIO(capability.preview.body)) as image:
-        assert image.size == (957, 720)
+        assert image.size == (1280, 720)
         assert image.format == "JPEG"
+        assert max(image.getpixel((10, 360))) <= 5
+        assert image.getpixel((640, 360))[0] > 200
 
 
 @pytest.mark.asyncio
@@ -93,7 +95,7 @@ async def test_location_is_drawn_in_the_bottom_right_corner() -> None:
     ):
         difference = ImageChops.difference(plain_image, located_image)
         assert difference.getbbox() is not None
-        assert difference.crop((320, 180, 640, 360)).getbbox() is not None
+        assert difference.crop((900, 500, 1280, 720)).getbbox() is not None
 
 
 @pytest.mark.asyncio
@@ -122,7 +124,31 @@ async def test_date_is_drawn_beneath_location() -> None:
         Image.open(io.BytesIO(metadata_preview.body)) as metadata_image,
     ):
         difference = ImageChops.difference(location_image, metadata_image)
-        assert difference.crop((320, 180, 640, 360)).getbbox() is not None
+        assert difference.crop((900, 500, 1280, 720)).getbbox() is not None
+
+
+@pytest.mark.asyncio
+async def test_portrait_metadata_is_drawn_in_screen_letterbox() -> None:
+    class MetadataSource(Source):
+        async def fetch_metadata(self, asset_id: UUID) -> tuple[str | None, str | None]:
+            return "Portland, Oregon", "July 4, 2026"
+
+    body = image_bytes((360, 640))
+    plain = ImageRelay(settings(), Source(Preview(body, "image/png")))
+    metadata = ImageRelay(settings(), MetadataSource(Preview(body, "image/png")))
+
+    await plain.mint(ASSET_ID)
+    await metadata.mint(ASSET_ID)
+
+    plain_preview = next(iter(plain._tokens.values())).preview
+    metadata_preview = next(iter(metadata._tokens.values())).preview
+    with (
+        Image.open(io.BytesIO(plain_preview.body)) as plain_image,
+        Image.open(io.BytesIO(metadata_preview.body)) as metadata_image,
+    ):
+        difference = ImageChops.difference(plain_image, metadata_image)
+        assert plain_image.size == metadata_image.size == (1280, 720)
+        assert difference.crop((900, 500, 1280, 720)).getbbox() is not None
 
 
 @pytest.mark.asyncio

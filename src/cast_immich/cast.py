@@ -10,6 +10,7 @@ from typing import Any
 from uuid import UUID
 
 import pychromecast
+from pychromecast.const import CAST_TYPE_CHROMECAST
 from pychromecast.controllers.media import MediaStatusListener
 from pychromecast.controllers.receiver import CastStatusListener
 from pychromecast.discovery import discover_chromecasts as _discover_chromecasts
@@ -128,6 +129,7 @@ async def discover_chromecasts(discovery_timeout: float) -> tuple[DiscoveredChro
                 uuid=device.uuid,
             )
             for device in devices
+            if device.cast_type == CAST_TYPE_CHROMECAST
         }
         return tuple(
             sorted(

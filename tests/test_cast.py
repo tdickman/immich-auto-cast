@@ -165,9 +165,11 @@ async def test_broad_discovery_deduplicates_uuids_and_closes_browser(
     stopped = threading.Event()
     duplicate_uuid = UUID(int=1)
     devices = [
-        SimpleNamespace(uuid=duplicate_uuid, friendly_name="Living Room"),
-        SimpleNamespace(uuid=duplicate_uuid, friendly_name="Duplicate"),
-        SimpleNamespace(uuid=UUID(int=2), friendly_name="Living Room"),
+        SimpleNamespace(uuid=duplicate_uuid, friendly_name="Living Room", cast_type="cast"),
+        SimpleNamespace(uuid=duplicate_uuid, friendly_name="Duplicate", cast_type="cast"),
+        SimpleNamespace(uuid=UUID(int=2), friendly_name="Living Room", cast_type="cast"),
+        SimpleNamespace(uuid=UUID(int=3), friendly_name="Audio", cast_type="audio"),
+        SimpleNamespace(uuid=UUID(int=4), friendly_name="Group", cast_type="group"),
     ]
     browser = SimpleNamespace(stop_discovery=stopped.set)
     monkeypatch.setattr(
