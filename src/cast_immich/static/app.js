@@ -11,6 +11,7 @@ const form = document.querySelector("#settings-form");
 const toast = document.querySelector("#toast");
 const outputList = document.querySelector("#output-list");
 const outputSettingsList = document.querySelector("#output-settings-list");
+let requestSequence = 0;
 
 const mutationHeaders = () => ({
   "Content-Type": "application/json",
@@ -41,6 +42,20 @@ function mutate(path, body) {
 
 function outputPath(outputId, suffix) {
   return `/api/outputs/${encodeURIComponent(outputId)}${suffix}`;
+}
+
+function createRequestId() {
+  const webCrypto = globalThis.crypto;
+  if (typeof webCrypto?.randomUUID === "function") return webCrypto.randomUUID();
+  if (typeof webCrypto?.getRandomValues === "function") {
+    const bytes = webCrypto.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = [...bytes].map(value => value.toString(16).padStart(2, "0")).join("");
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+  requestSequence += 1;
+  return `${Date.now().toString(36)}-${requestSequence.toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
 function notify(message, error = false) {
@@ -409,7 +424,7 @@ async function applySource(outputId, source, message) {
 async function performControl(outputId, command) {
   const key = `${outputId}:${command}`;
   if (state.commandInFlight.has(key)) return;
-  const requestId = state.pendingCommands.get(key) || crypto.randomUUID();
+  const requestId = state.pendingCommands.get(key) || createRequestId();
   state.pendingCommands.set(key, requestId);
   state.commandInFlight.add(key);
   renderOverview();
@@ -433,7 +448,7 @@ async function performControl(outputId, command) {
 async function performSeek(outputId, targetKind, targetId) {
   document.querySelectorAll(".photo-jump").forEach(button => { button.disabled = true; });
   try {
-    const result = await mutate(outputPath(outputId, "/seek"), { request_id: crypto.randomUUID(), target_kind: targetKind, target_id: targetId });
+    const result = await mutate(outputPath(outputId, "/seek"), { request_id: createRequestId(), target_kind: targetKind, target_id: targetId });
     notify(titleCase(result.outcome));
     await refreshOutput(outputId);
   } catch (error) {

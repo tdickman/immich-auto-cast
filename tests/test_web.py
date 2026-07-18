@@ -206,6 +206,8 @@ async def test_dashboard_assets_expose_complete_operator_interface(
     assert "Your photos" not in html
     assert 'id="cast-state"' not in html
     assert 'value === "owned" ? "Ready"' in javascript
+    assert "function createRequestId()" in javascript
+    assert "crypto.randomUUID()" not in javascript
     assert "X-CSRF-Token" in javascript
     assert "output?.available_actions?.[command] === true" in javascript
     assert 'command === "reconnect" ? {} : { request_id: requestId }' in javascript
