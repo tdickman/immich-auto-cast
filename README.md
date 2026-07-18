@@ -79,7 +79,8 @@ The first valid configuration atomically creates `installation-id` beside the co
 - `outputs.video_max_duration` and `outputs.video_muted`: reserved video settings. Video selection is temporarily disabled; see [`docs/video-support.md`](docs/video-support.md).
 - `outputs.show_web_qr`: overlays a small bottom-left QR code linking to the dashboard. Disabled by default.
 - `outputs.web_qr_size`: QR module scale from 1 (tiny, the default) through 6 (largest).
-- `outputs.web_qr_position`, `outputs.web_qr_inset_x`, and `outputs.web_qr_inset_y`: per-output corner and exact 1280x720 canvas insets. The dashboard also provides a draggable placement preview.
+- `outputs.web_qr_position`, `outputs.web_qr_inset_x`, and `outputs.web_qr_inset_y`: per-output corner and exact 1280x720 canvas insets.
+- `outputs.web_qr_opacity`: QR badge opacity from 50% through 100%, defaulting to 75%.
 
 The dashboard validates and atomically rewrites the complete TOML configuration. Concurrent stale saves are rejected. Legacy `[chromecast]` plus `[rotation]` files load as a single `default` output without being rewritten until a save. New saves always use `[[outputs]]`. A blank API-key field preserves the file key. When `CAST_IMMICH_API_KEY` is set, it remains authoritative and browser replacement is disabled.
 

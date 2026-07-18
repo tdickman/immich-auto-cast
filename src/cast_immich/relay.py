@@ -67,9 +67,10 @@ class QrPlacement:
     position: str
     inset_x: int
     inset_y: int
+    opacity: int
 
 
-DEFAULT_QR_PLACEMENT = QrPlacement(1, "bottom-left", 36, 36)
+DEFAULT_QR_PLACEMENT = QrPlacement(1, "bottom-left", 36, 36, 75)
 
 
 class ImageRelay:
@@ -136,6 +137,7 @@ class ImageRelay:
         web_qr_position: str = "bottom-left",
         web_qr_inset_x: int = 36,
         web_qr_inset_y: int = 36,
+        web_qr_opacity: int = 75,
     ) -> None:
         """Fetch and normalize an image before the receiver needs it."""
         if isinstance(asset, Asset) and asset.media_type is MediaType.VIDEO:
@@ -147,6 +149,7 @@ class ImageRelay:
             web_qr_position=web_qr_position,
             web_qr_inset_x=web_qr_inset_x,
             web_qr_inset_y=web_qr_inset_y,
+            web_qr_opacity=web_qr_opacity,
         )
 
     async def preload_media(
@@ -158,6 +161,7 @@ class ImageRelay:
         web_qr_position: str = "bottom-left",
         web_qr_inset_x: int = 36,
         web_qr_inset_y: int = 36,
+        web_qr_opacity: int = 75,
     ) -> None:
         await self.preload(
             asset,
@@ -166,6 +170,7 @@ class ImageRelay:
             web_qr_position=web_qr_position,
             web_qr_inset_x=web_qr_inset_x,
             web_qr_inset_y=web_qr_inset_y,
+            web_qr_opacity=web_qr_opacity,
         )
 
     async def mint(
@@ -177,6 +182,7 @@ class ImageRelay:
         web_qr_position: str = "bottom-left",
         web_qr_inset_x: int = 36,
         web_qr_inset_y: int = 36,
+        web_qr_opacity: int = 75,
     ) -> tuple[str, str]:
         if self._closed:
             raise AssetUnavailable("media relay is closed")
@@ -190,6 +196,7 @@ class ImageRelay:
                 web_qr_position=web_qr_position,
                 web_qr_inset_x=web_qr_inset_x,
                 web_qr_inset_y=web_qr_inset_y,
+                web_qr_opacity=web_qr_opacity,
             )
             if media.media_type is MediaType.IMAGE
             else None
@@ -217,6 +224,7 @@ class ImageRelay:
         web_qr_position: str = "bottom-left",
         web_qr_inset_x: int = 36,
         web_qr_inset_y: int = 36,
+        web_qr_opacity: int = 75,
     ) -> tuple[str, str]:
         return await self.mint(
             asset,
@@ -225,6 +233,7 @@ class ImageRelay:
             web_qr_position=web_qr_position,
             web_qr_inset_x=web_qr_inset_x,
             web_qr_inset_y=web_qr_inset_y,
+            web_qr_opacity=web_qr_opacity,
         )
 
     async def _get_preview(
@@ -236,11 +245,18 @@ class ImageRelay:
         web_qr_position: str = "bottom-left",
         web_qr_inset_x: int = 36,
         web_qr_inset_y: int = 36,
+        web_qr_opacity: int = 75,
     ) -> Preview:
         if self._closed:
             raise AssetUnavailable("image relay is closed")
         placement = (
-            QrPlacement(web_qr_size, web_qr_position, web_qr_inset_x, web_qr_inset_y)
+            QrPlacement(
+                web_qr_size,
+                web_qr_position,
+                web_qr_inset_x,
+                web_qr_inset_y,
+                web_qr_opacity,
+            )
             if show_web_qr
             else None
         )
@@ -511,8 +527,19 @@ def _draw_web_qr(
     sample = image.crop((left, top, left + width, top + height)).convert("L")
     luminance = ImageStat.Stat(sample).mean[0]
     dark_background = luminance < 145
-    background = (0, 0, 0, 155) if dark_background else (255, 255, 255, 175)
-    module = (255, 255, 255, 245) if dark_background else (0, 0, 0, 240)
+    opacity = placement.opacity / 100
+    background_alpha = round((155 if dark_background else 175) * opacity)
+    module_alpha = round((245 if dark_background else 240) * opacity)
+    background = (
+        (0, 0, 0, background_alpha)
+        if dark_background
+        else (255, 255, 255, background_alpha)
+    )
+    module = (
+        (255, 255, 255, module_alpha)
+        if dark_background
+        else (0, 0, 0, module_alpha)
+    )
 
     badge = Image.new("RGBA", (width, height))
     draw = ImageDraw.Draw(badge)

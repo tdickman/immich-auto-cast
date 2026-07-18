@@ -81,6 +81,7 @@ class RotationSettings:
     web_qr_position: str = "bottom-left"
     web_qr_inset_x: int = 36
     web_qr_inset_y: int = 36
+    web_qr_opacity: int = 75
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,6 +163,7 @@ def default_form_values() -> dict[str, Any]:
                 "web_qr_position": "bottom-left",
                 "web_qr_inset_x": 36,
                 "web_qr_inset_y": 36,
+                "web_qr_opacity": 75,
             }
         ],
         "relay": {
@@ -367,6 +369,13 @@ def _parse_candidate(
             if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= maximum:
                 _fail(f"{section}.{key} must be between 0 and {maximum}")
             web_qr_insets.append(value)
+        web_qr_opacity = output.get("web_qr_opacity", 75)
+        if (
+            isinstance(web_qr_opacity, bool)
+            or not isinstance(web_qr_opacity, int)
+            or not 50 <= web_qr_opacity <= 100
+        ):
+            _fail(f"{section}.web_qr_opacity must be between 50 and 100")
         outputs.append(
             OutputSettings(
                 output_id,
@@ -407,6 +416,7 @@ def _parse_candidate(
                     web_qr_position,
                     web_qr_insets[0],
                     web_qr_insets[1],
+                    web_qr_opacity,
                 ),
             )
         )
@@ -486,6 +496,7 @@ def _form_values(settings: Settings, path: Path) -> dict[str, Any]:
                 "web_qr_position": output.rotation.web_qr_position,
                 "web_qr_inset_x": output.rotation.web_qr_inset_x,
                 "web_qr_inset_y": output.rotation.web_qr_inset_y,
+                "web_qr_opacity": output.rotation.web_qr_opacity,
             }
             for output in settings.outputs
         ],
@@ -575,6 +586,7 @@ def _serialize_configuration(
         "web_qr_position",
         "web_qr_inset_x",
         "web_qr_inset_y",
+        "web_qr_opacity",
     )
     for output in values["outputs"]:
         lines.append("[[outputs]]")

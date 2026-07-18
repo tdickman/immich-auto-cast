@@ -8,7 +8,7 @@ from uuid import UUID
 import aiohttp
 import pytest
 from aiohttp import web
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageStat
 
 from cast_immich.config import ImmichSettings, RelaySettings
 from cast_immich.immich import Asset, ImmichClient, MediaType, Preview
@@ -54,8 +54,8 @@ def test_web_qr_badge_adapts_to_background_brightness() -> None:
     dark_module = dark.getpixel((margin + padding + module_x, top + padding + module_y))
     light_module = light.getpixel((margin + padding + module_x, top + padding + module_y))
 
-    assert min(dark_module) > 220
-    assert max(light_module) < 30
+    assert min(dark_module) > 180
+    assert max(light_module) < 70
     assert max(dark.getpixel((margin + 1, top + qr.height // 2))) < 40
     assert min(light.getpixel((margin + 1, top + qr.height // 2))) > 220
 
@@ -65,13 +65,27 @@ def test_web_qr_uses_corner_and_exact_insets() -> None:
     image = Image.new("RGB", (1280, 720), (220, 220, 220))
     original = image.copy()
 
-    _draw_web_qr(image, qr, QrPlacement(2, "top-right", 24, 18))
+    _draw_web_qr(image, qr, QrPlacement(2, "top-right", 24, 18, 75))
 
     bounds = ImageChops.difference(original, image).getbbox()
     assert bounds is not None
     assert bounds[0] > image.width - qr.width - 40
     assert bounds[1] == 18
     assert bounds[2] == image.width - 24
+
+
+def test_web_qr_opacity_dims_the_badge() -> None:
+    qr = _make_qr("http://192.168.1.5:8080/")
+    original = Image.new("RGB", (1280, 720), (40, 40, 40))
+    dimmed = original.copy()
+    opaque = original.copy()
+
+    _draw_web_qr(dimmed, qr, QrPlacement(1, "bottom-left", 36, 36, 50))
+    _draw_web_qr(opaque, qr, QrPlacement(1, "bottom-left", 36, 36, 100))
+
+    dimmed_difference = ImageStat.Stat(ImageChops.difference(original, dimmed)).sum
+    opaque_difference = ImageStat.Stat(ImageChops.difference(original, opaque)).sum
+    assert sum(dimmed_difference) < sum(opaque_difference)
 
 
 class Source:

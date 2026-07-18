@@ -54,6 +54,7 @@ def test_loads_normalized_settings_and_environment_secret(tmp_path: Path) -> Non
     assert settings.outputs[0].rotation.web_qr_position == "bottom-left"
     assert settings.outputs[0].rotation.web_qr_inset_x == 36
     assert settings.outputs[0].rotation.web_qr_inset_y == 36
+    assert settings.outputs[0].rotation.web_qr_opacity == 75
 
 
 def test_rejects_non_boolean_video_muting(tmp_path: Path) -> None:
@@ -87,6 +88,16 @@ def test_rejects_invalid_web_qr_placement(
     path = tmp_path / "config.toml"
     path.write_text(config_text().replace("interval = 30", f"interval = 30\n{field} = {value}"))
     with pytest.raises(ConfigError, match=field):
+        load_settings(path)
+
+
+@pytest.mark.parametrize("opacity", [49, 101, 75.5])
+def test_rejects_invalid_web_qr_opacity(tmp_path: Path, opacity: int | float) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        config_text().replace("interval = 30", f"interval = 30\nweb_qr_opacity = {opacity}")
+    )
+    with pytest.raises(ConfigError, match="web_qr_opacity"):
         load_settings(path)
 
 
@@ -189,6 +200,7 @@ def test_editable_settings_round_trip_every_value_and_mask_key(tmp_path: Path) -
         web_qr_position="top-right",
         web_qr_inset_x=72,
         web_qr_inset_y=54,
+        web_qr_opacity=60,
     )
     form["service"]["log_level"] = "debug"
 
@@ -206,9 +218,11 @@ def test_editable_settings_round_trip_every_value_and_mask_key(tmp_path: Path) -
     assert reloaded.settings.outputs[0].rotation.web_qr_position == "top-right"
     assert reloaded.settings.outputs[0].rotation.web_qr_inset_x == 72
     assert reloaded.settings.outputs[0].rotation.web_qr_inset_y == 54
+    assert reloaded.settings.outputs[0].rotation.web_qr_opacity == 60
     assert "show_web_qr = true" in path.read_text(encoding="utf-8")
     assert "web_qr_size = 3" in path.read_text(encoding="utf-8")
     assert 'web_qr_position = "top-right"' in path.read_text(encoding="utf-8")
+    assert "web_qr_opacity = 60" in path.read_text(encoding="utf-8")
     assert "[[outputs]]" in path.read_text(encoding="utf-8")
     assert "[chromecast]" not in path.read_text(encoding="utf-8")
     assert path.stat().st_mode & 0o777 == 0o600
