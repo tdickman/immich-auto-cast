@@ -537,6 +537,7 @@ def _output_json(output: OutputSnapshot, active: bool) -> dict[str, Any]:
 def _legacy_output_json(output: OutputSnapshot, active: bool) -> dict[str, Any]:
     coordinator = output.coordinator
     owned = active and coordinator.state.value == "owned"
+    stoppable = active and coordinator.state.value in {"owned", "protected"}
     rotation_enabled = coordinator.rotation_enabled
     return {
         "coordinator": _coordinator_json(coordinator),
@@ -557,7 +558,7 @@ def _legacy_output_json(output: OutputSnapshot, active: bool) -> dict[str, Any]:
             "pause": active and rotation_enabled,
             "enable": active and not rotation_enabled,
             "next": owned,
-            "stop": owned,
+            "stop": stoppable,
             "reconnect": active,
             "autocast_enable": (active and not coordinator.autocast_enabled),
             "autocast_disable": active and coordinator.autocast_enabled,

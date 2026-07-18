@@ -306,3 +306,21 @@ async def test_stop_cast_stops_media_and_quits_receiver_app() -> None:
     assert await adapter.stop_cast(4) is True
     assert controller.calls == [(("stop",), {"timeout": 2})]
     assert quit_calls == [True]
+
+
+@pytest.mark.asyncio
+async def test_stop_cast_quits_app_when_media_stop_is_unsupported() -> None:
+    adapter = CastAdapter(ChromecastSettings(UUID(int=1), 1, 2), asyncio.Queue())
+    adapter._generation = 4
+    quit_calls: list[bool] = []
+
+    def unsupported_stop(**_kwargs: Any) -> None:
+        raise RuntimeError("no media namespace")
+
+    adapter._cast = SimpleNamespace(
+        media_controller=SimpleNamespace(stop=unsupported_stop),
+        quit_app=lambda: quit_calls.append(True),
+    )
+
+    assert await adapter.stop_cast(4) is True
+    assert quit_calls == [True]

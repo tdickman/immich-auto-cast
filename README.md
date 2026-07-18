@@ -64,11 +64,11 @@ The receiver fetches each photo itself. `127.0.0.1`, an isolated container addre
 
 ## Safety Model
 
-The service owns a session only when versioned media metadata contains its persistent installation ID, a load ID, and the exact current content URL. It requires fresh receiver and media observations before loading. This receiver reports displayed still images as paused, so paused media is retained and controllable only when those complete ownership markers match; all externally paused media remains protected. The built-in Backdrop receiver is considered idle only when it reports no media session or content; unknown apps and other Backdrop combinations are protected. Dashboard next and stop requests repeat the fresh ownership check at execution time; stale or protected requests issue no media command.
+The service owns a session only when versioned media metadata contains its persistent installation ID, a load ID, and the exact current content URL. It requires fresh receiver and media observations before loading. This receiver reports displayed still images as paused, so paused media is retained and controllable only when those complete ownership markers match; all externally paused media remains protected from slideshow controls. The built-in Backdrop receiver is considered idle only when it reports no media session or content; unknown apps and other Backdrop combinations are protected. The dashboard's explicit Stop cast action is the exception: after a fresh status check, it disables autocast, stops media, and terminates any active Cast app on that output.
 
 Chromecast does not provide an atomic “load only if still idle” operation. A user can start playback in the small interval between the final status check and `LOAD`; this is an unavoidable best-effort race. The service minimizes it and never sends a compensating stop, because that could stop the user's new media.
 
-Pause cancels timers and unsent image preparation but leaves current receiver media untouched. Turning autocast off sends `STOP` only after fresh positive ownership; it cannot stop external, unknown, or ambiguously owned media. Turning autocast on casts immediately when the receiver is idle. After later idle transitions, the dashboard counts down the configured delay before casting again.
+Pause cancels timers and unsent image preparation but leaves current receiver media untouched. Turning autocast off sends `STOP` only after fresh positive ownership; it cannot stop external, unknown, or ambiguously owned media. Turning autocast on also enables automatic rotation and casts immediately when the receiver is idle. After later idle transitions, the dashboard counts down the configured delay before casting again.
 
 ## Operations
 

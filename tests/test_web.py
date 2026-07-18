@@ -165,6 +165,7 @@ async def test_status_and_config_are_safe_and_setup_schema_is_complete(
     assert status_payload["outputs"][0]["receiver"] == {
         "uuid": "12345678-1234-4234-8234-123456789abc"
     }
+    assert status_payload["outputs"][0]["available_actions"]["stop"] is True
     assert status_payload["coordinator"] == {
         "state": "protected",
         "rotation_enabled": True,
@@ -202,18 +203,35 @@ async def test_dashboard_assets_expose_complete_operator_interface(
     assert page.status == script.status == styles.status == 200
     assert 'name="immich.api_key" type="password"' in html
     assert 'id="output-list"' in html
+    assert 'role="tablist"' in html
+    assert 'id="output-total"' not in html
     assert 'id="selected-workspace"' in html
     assert "Your photos" not in html
     assert 'id="cast-state"' not in html
-    assert 'value === "owned" ? "Ready"' in javascript
+    assert 'id="cast-detail"' not in html
+    assert 'class="readout-label"' not in html
+    assert 'id="autocast-status"' not in html
+    assert "Selected output" not in html
+    assert "Now showing /" not in javascript
+    assert "Previous /" not in javascript
+    assert "Up next /" not in javascript
+    assert 'id="stop-button"' in html
+    assert 'id="reconnect-button"' not in html
+    assert "Stop cast" in html
+    assert "Disable autocast" in html
     assert "function createRequestId()" in javascript
     assert "crypto.randomUUID()" not in javascript
     assert "X-CSRF-Token" in javascript
     assert "output?.available_actions?.[command] === true" in javascript
-    assert 'command === "reconnect" ? {} : { request_id: requestId }' in javascript
+    assert 'actionAvailable(output, "stop")' in javascript
+    assert 'output.autocast_enabled ? "Disable autocast" : "Enable autocast"' in javascript
+    assert "const canUseRotation = output.autocast_enabled" in javascript
+    assert "rotation.disabled = !canUseRotation" in javascript
+    assert 'performControl(state.selectedOutputId, "stop")' in javascript
     assert "addDiscoveredOutputs(state.devices)" in javascript
     assert "Save changes to activate" in javascript
-    assert 'output.autocast_enabled ? "autocast_disable" : "autocast_enable"' in javascript
+    assert 'tab.setAttribute("role", "tab")' in javascript
+    assert 'className = "output-quick"' not in javascript
     assert "@media (max-width: 520px)" in css
     assert "overflow-x: auto" in css
     assert page.headers["Cache-Control"] == "no-store"

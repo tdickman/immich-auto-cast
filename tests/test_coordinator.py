@@ -233,7 +233,7 @@ async def test_output_ownership_does_not_adopt_another_outputs_session() -> None
 
 @pytest.mark.asyncio
 async def test_disabled_autocast_does_not_load_and_can_be_enabled() -> None:
-    history = History(autocast=False)
+    history = History(enabled=False, autocast=False)
     coordinator, queue, selector, cast = make_coordinator(history)
 
     await observe_idle(coordinator)
@@ -249,7 +249,9 @@ async def test_disabled_autocast_does_not_load_and_can_be_enabled() -> None:
 
     assert await enabling is CommandResult.APPLIED
     assert history.autocast is True
+    assert history.enabled is True
     assert coordinator.snapshot.autocast_enabled is True
+    assert coordinator.snapshot.rotation_enabled is True
 
     await send_idle_snapshot(coordinator)
     await drain_one(queue, coordinator)
@@ -806,8 +808,7 @@ async def test_enable_persists_and_requires_fresh_status_before_loading() -> Non
     "setup",
     ["unavailable", "synchronizing", "idle", "pending", "protected", "cooldown", "paused"],
 )
-@pytest.mark.parametrize("action", ["next", "stop"])
-async def test_protected_control_states_issue_no_media_command(setup: str, action: str) -> None:
+async def test_protected_control_states_issue_no_media_command(setup: str) -> None:
     coordinator, queue, _selector, cast = make_coordinator()
     if setup == "synchronizing":
         await coordinator.handle(event(EventKind.CONNECTED))
@@ -838,7 +839,7 @@ async def test_protected_control_states_issue_no_media_command(setup: str, actio
 
     cast.loads.clear()
     runner = asyncio.create_task(coordinator.run())
-    result = await getattr(coordinator, action)(f"{action}-{setup}")
+    result = await coordinator.next(f"next-{setup}")
 
     assert result is CommandResult.REFUSED_NOT_OWNED
     assert cast.loads == []
@@ -848,8 +849,7 @@ async def test_protected_control_states_issue_no_media_command(setup: str, actio
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("action", ["next", "stop"])
-async def test_fresh_ownership_race_refuses_without_media_command(action: str) -> None:
+async def test_fresh_ownership_race_refuses_without_media_command() -> None:
     coordinator, queue, _selector, cast = make_coordinator()
     await drive_idle_to_load(coordinator, queue)
     await confirm_load(coordinator, cast)
@@ -857,7 +857,7 @@ async def test_fresh_ownership_race_refuses_without_media_command(action: str) -
     runner = asyncio.create_task(coordinator.run())
 
     refresh_count = len(cast.refreshes)
-    command = asyncio.create_task(getattr(coordinator, action)(f"race-{action}"))
+    command = asyncio.create_task(coordinator.next("race-next"))
     await wait_until(lambda: len(cast.refreshes) > refresh_count)
     await coordinator.handle(
         event(EventKind.RECEIVER, receiver=ReceiverStatus("CC1AD845", "external"))
@@ -869,6 +869,42 @@ async def test_fresh_ownership_race_refuses_without_media_command(action: str) -
     assert await command is CommandResult.REFUSED_NOT_OWNED
     assert cast.loads == []
     assert cast.stops == []
+    await coordinator.close()
+    runner.cancel()
+
+
+@pytest.mark.asyncio
+async def test_stop_terminates_external_cast_after_fresh_status() -> None:
+    history = History()
+    coordinator, _queue, _selector, cast = make_coordinator(history)
+    await coordinator.handle(event(EventKind.CONNECTED))
+    receiver = ReceiverStatus("CC1AD845", "external")
+    media = MediaStatus("PLAYING", "https://external", 9, {})
+    await coordinator.handle(event(EventKind.RECEIVER, receiver=receiver))
+    await coordinator.handle(event(EventKind.MEDIA, media=media))
+    runner = asyncio.create_task(coordinator.run())
+
+    command = asyncio.create_task(coordinator.stop("stop-external"))
+    await wait_until(lambda: cast.refreshes == [1])
+    await coordinator.handle(event(EventKind.RECEIVER, receiver=receiver))
+    await coordinator.handle(event(EventKind.MEDIA, media=media))
+
+    assert await command is CommandResult.APPLIED
+    assert cast.cast_stops == [1]
+    assert history.autocast is False
+    assert coordinator.snapshot.autocast_enabled is False
+    await coordinator.close()
+    runner.cancel()
+
+
+@pytest.mark.asyncio
+async def test_stop_refuses_idle_receiver() -> None:
+    coordinator, _queue, _selector, cast = make_coordinator()
+    await observe_idle(coordinator)
+    runner = asyncio.create_task(coordinator.run())
+
+    assert await coordinator.stop("stop-idle") is CommandResult.REFUSED_NOT_OWNED
+    assert cast.cast_stops == []
     await coordinator.close()
     runner.cancel()
 

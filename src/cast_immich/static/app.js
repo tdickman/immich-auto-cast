@@ -1,10 +1,10 @@
 "use strict";
 
 const state = {
-  csrf: "", revision: 0, config: null, dirty: false, timer: null, countdownTimer: null,
+  csrf: "", revision: 0, config: null, dirty: false, timer: null,
   mode: "setup", error: "", outputs: new Map(), histories: new Map(), historySignatures: new Map(),
   selectedOutputId: localStorage.getItem("cast-immich-output"), pendingCommands: new Map(), commandInFlight: new Set(),
-  sourceDrafts: new Map(), autocastDeadlines: new Map(), thumbnailCache: new Map(),
+  sourceDrafts: new Map(), thumbnailCache: new Map(),
   thumbnailKeys: new Map(), devices: [],
 };
 const form = document.querySelector("#settings-form");
@@ -69,13 +69,6 @@ function titleCase(value) {
   return String(value || "unknown").replaceAll("_", " ").replace(/\b\w/g, character => character.toUpperCase());
 }
 
-function sourceSummary(source) {
-  if (!source) return "Timeline";
-  if (source.kind === "search") return source.query ? `Search: ${source.query}` : "AI search";
-  if (source.kind === "album" || source.kind === "person") return source.name || source.label || titleCase(source.kind);
-  return titleCase(source.kind || "timeline");
-}
-
 function actionAvailable(output, command) {
   return output?.available_actions?.[command] === true;
 }
@@ -103,56 +96,21 @@ function setSelectedOutput(outputId) {
   loadHistory(outputId).catch(error => notify(error.message, true));
 }
 
-function outputStateLabel(output) {
-  const value = output.coordinator?.state || state.mode;
-  return value === "owned" ? "Ready" : titleCase(value);
-}
-
-function makeQuickButton(output, command, label, mark) {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "output-quick";
-  button.dataset.outputAction = "control";
-  button.dataset.outputId = output.id;
-  button.dataset.command = command;
-  button.disabled = state.commandInFlight.has(`${output.id}:${command}`) || !actionAvailable(output, command);
-  const symbol = document.createElement("span");
-  symbol.setAttribute("aria-hidden", "true");
-  symbol.textContent = mark;
-  button.append(symbol, document.createTextNode(label));
-  return button;
-}
-
 function renderOverview() {
   const outputs = [...state.outputs.values()];
-  document.querySelector("#output-total").textContent = `${outputs.length} output${outputs.length === 1 ? "" : "s"}`;
   outputList.replaceChildren(...outputs.map(output => {
-    const card = document.createElement("article");
-    card.className = `output-card${output.id === state.selectedOutputId ? " selected" : ""}`;
-    const select = document.createElement("button");
-    select.type = "button";
-    select.className = "output-select";
-    select.dataset.outputAction = "select";
-    select.dataset.outputId = output.id;
-    if (output.id === state.selectedOutputId) select.setAttribute("aria-current", "true");
-    const heading = document.createElement("strong");
-    heading.textContent = output.name || output.id;
-    const receiver = document.createElement("span");
-    receiver.className = "output-receiver";
-    receiver.textContent = `${output.receiver?.friendly_name || output.receiver?.name || output.receiver?.uuid || "No receiver"} · ${outputStateLabel(output)}`;
-    const summary = document.createElement("span");
-    summary.className = "output-summary";
-    summary.textContent = `${sourceSummary(output.source)} · ${output.autocast_enabled ? "Autocast on" : "Autocast off"}`;
-    select.append(heading, receiver, summary);
-    const actions = document.createElement("div");
-    actions.className = "output-actions";
-    const autocastCommand = output.autocast_enabled ? "autocast_disable" : "autocast_enable";
-    actions.append(
-      makeQuickButton(output, autocastCommand, output.autocast_enabled ? "Autocast off" : "Autocast on", "A"),
-      makeQuickButton(output, "next", "Next", "→"),
-    );
-    card.append(select, actions);
-    return card;
+    const tab = document.createElement("button");
+    const selected = output.id === state.selectedOutputId;
+    tab.type = "button";
+    tab.className = "output-tab";
+    tab.dataset.outputAction = "select";
+    tab.dataset.outputId = output.id;
+    tab.setAttribute("role", "tab");
+    tab.setAttribute("aria-selected", String(selected));
+    tab.setAttribute("aria-controls", "selected-workspace");
+    tab.tabIndex = selected ? 0 : -1;
+    tab.textContent = output.name || output.id;
+    return tab;
   }));
 
   const empty = outputs.length === 0;
@@ -160,19 +118,13 @@ function renderOverview() {
   document.querySelector("#selected-workspace").hidden = empty;
 }
 
-function renderCountdowns() {
+function renderAutocastControl() {
   const outputId = state.selectedOutputId;
   const output = state.outputs.get(outputId);
   if (!output) return;
   const button = document.querySelector("#autocast-toggle");
-  const status = document.querySelector("#autocast-status");
   button.classList.toggle("autocast-off", !output.autocast_enabled);
-  button.querySelector("span:last-child").textContent = output.autocast_enabled ? "Autocast on" : "Autocast off";
-  if (!output.autocast_enabled) status.textContent = "Autocast is off";
-  else if (state.autocastDeadlines.has(outputId)) {
-    const remaining = Math.max(0, Math.ceil((state.autocastDeadlines.get(outputId) - Date.now()) / 1000));
-    status.textContent = `Casting in ${remaining}s`;
-  } else status.textContent = "Autocast is on";
+  button.querySelector("span:last-child").textContent = output.autocast_enabled ? "Disable autocast" : "Enable autocast";
 }
 
 function renderSelectedWorkspace() {
@@ -185,26 +137,24 @@ function renderSelectedWorkspace() {
   const rotationIsEnabled = rotationEnabled(output);
   const draft = sourceDraft(outputId);
   document.querySelector("#workspace-output-name").textContent = output.name || output.id;
-  document.querySelector("#current-title").textContent = `Now showing / ${output.name || output.id}`;
-  document.querySelector("#history-title").textContent = `Previous / ${output.name || output.id}`;
-  document.querySelector("#upcoming-title").textContent = `Up next / ${output.name || output.id}`;
-  document.querySelector("#cast-detail").textContent = active
-    ? rotationIsEnabled ? "Automatic rotation is on" : "Automatic rotation is paused"
-    : "Open settings to finish setup";
   document.querySelector("#ownership-note").textContent = state.error || coordinator.error || (
     owned ? `Ready to control ${output.name || output.id}.` : "Waiting until this receiver is available."
   );
   const rotation = document.querySelector("#rotation-toggle");
-  rotation.dataset.command = rotationIsEnabled ? "pause" : "enable";
-  rotation.querySelector(".button-mark").textContent = rotationIsEnabled ? "Ⅱ" : "▶";
-  rotation.querySelector("span:last-child").textContent = rotationIsEnabled ? "Pause rotation" : "Enable rotation";
-  rotation.disabled = state.commandInFlight.has(`${outputId}:${rotation.dataset.command}`) || !actionAvailable(output, rotation.dataset.command);
+  const canUseRotation = output.autocast_enabled;
+  rotation.dataset.command = canUseRotation && rotationIsEnabled ? "pause" : "enable";
+  rotation.querySelector(".button-mark").textContent = canUseRotation && rotationIsEnabled ? "Ⅱ" : "▶";
+  rotation.querySelector("span:last-child").textContent = canUseRotation && rotationIsEnabled ? "Pause rotation" : "Enable rotation";
+  rotation.disabled = !canUseRotation || state.commandInFlight.has(`${outputId}:${rotation.dataset.command}`) || !actionAvailable(output, rotation.dataset.command);
   document.querySelector("#next-button").disabled = state.commandInFlight.has(`${outputId}:next`) || !actionAvailable(output, "next");
   const autocastCommand = output.autocast_enabled ? "autocast_disable" : "autocast_enable";
   const autocast = document.querySelector("#autocast-toggle");
   autocast.dataset.command = autocastCommand;
   autocast.disabled = state.commandInFlight.has(`${outputId}:${autocastCommand}`) || !actionAvailable(output, autocastCommand);
-  document.querySelector("#reconnect-button").disabled = state.commandInFlight.has(`${outputId}:reconnect`) || !actionAvailable(output, "reconnect");
+  const stop = document.querySelector("#stop-button");
+  const canStop = actionAvailable(output, "stop");
+  stop.hidden = !canStop;
+  stop.disabled = state.commandInFlight.has(`${outputId}:stop`) || !canStop;
   document.querySelector(".source-apply").disabled = !active || draft.changing;
   ["#source-kind", "#album-select", "#person-select", "#search-query"].forEach(selector => {
     document.querySelector(selector).disabled = !active || draft.changing;
@@ -217,7 +167,7 @@ function renderSelectedWorkspace() {
   const search = document.querySelector("#search-query");
   if (!draft.searchDirty && document.activeElement !== search) search.value = source.kind === "search" ? source.query || "" : draft.searchQuery;
   showSourceControl(kind);
-  renderCountdowns();
+  renderAutocastControl();
 }
 
 function renderStatus(payload) {
@@ -225,14 +175,6 @@ function renderStatus(payload) {
   state.mode = payload.mode || "setup";
   state.error = payload.error || "";
   state.outputs = new Map((payload.outputs || []).map(output => [output.id, output]));
-  for (const output of state.outputs.values()) {
-    if (typeof output.autocast_remaining_seconds === "number") {
-      state.autocastDeadlines.set(output.id, Date.now() + output.autocast_remaining_seconds * 1000);
-    } else state.autocastDeadlines.delete(output.id);
-  }
-  for (const outputId of [...state.autocastDeadlines.keys()]) {
-    if (!state.outputs.has(outputId)) state.autocastDeadlines.delete(outputId);
-  }
   if (!state.outputs.has(state.selectedOutputId)) state.selectedOutputId = state.outputs.keys().next().value || null;
   if (state.selectedOutputId) localStorage.setItem("cast-immich-output", state.selectedOutputId);
   document.querySelector("#service-mode").textContent = titleCase(state.mode);
@@ -430,9 +372,7 @@ async function performControl(outputId, command) {
   renderOverview();
   renderSelectedWorkspace();
   try {
-    const suffix = command === "reconnect" ? "/reconnect" : `/controls/${command}`;
-    const body = command === "reconnect" ? {} : { request_id: requestId };
-    const result = await mutate(outputPath(outputId, suffix), body);
+    const result = await mutate(outputPath(outputId, `/controls/${command}`), { request_id: requestId });
     state.pendingCommands.delete(key);
     state.commandInFlight.delete(key);
     notify(titleCase(result.outcome));
@@ -687,8 +627,19 @@ async function loadPeople() {
 outputList.addEventListener("click", event => {
   const action = event.target.closest("[data-output-action]");
   if (!action) return;
-  if (action.dataset.outputAction === "select") setSelectedOutput(action.dataset.outputId);
-  else performControl(action.dataset.outputId, action.dataset.command);
+  setSelectedOutput(action.dataset.outputId);
+});
+outputList.addEventListener("keydown", event => {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  const tabs = [...outputList.querySelectorAll('[role="tab"]')];
+  if (!tabs.length) return;
+  const current = Math.max(0, tabs.indexOf(event.target));
+  const target = event.key === "Home" ? tabs[0]
+    : event.key === "End" ? tabs[tabs.length - 1]
+    : tabs[(current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length];
+  event.preventDefault();
+  setSelectedOutput(target.dataset.outputId);
+  target.focus();
 });
 
 outputSettingsList.addEventListener("click", event => {
@@ -754,7 +705,7 @@ document.querySelector("#open-settings-button").addEventListener("click", () => 
 document.querySelector("#rotation-toggle").addEventListener("click", event => performControl(state.selectedOutputId, event.currentTarget.dataset.command));
 document.querySelector("#autocast-toggle").addEventListener("click", event => performControl(state.selectedOutputId, event.currentTarget.dataset.command));
 document.querySelector("#next-button").addEventListener("click", () => performControl(state.selectedOutputId, "next"));
-document.querySelector("#reconnect-button").addEventListener("click", () => performControl(state.selectedOutputId, "reconnect"));
+document.querySelector("#stop-button").addEventListener("click", () => performControl(state.selectedOutputId, "stop"));
 document.querySelector("#source-kind").addEventListener("change", event => {
   const outputId = state.selectedOutputId;
   const kind = event.currentTarget.value;
@@ -804,7 +755,6 @@ async function boot() {
   catch (error) { notify(error.message, true); }
   document.querySelector("#discover-button").click();
   state.timer = window.setInterval(refresh, 3500);
-  state.countdownTimer = window.setInterval(renderCountdowns, 250);
 }
 
 boot();

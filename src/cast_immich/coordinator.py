@@ -351,6 +351,22 @@ class Coordinator:
             await self._set_autocast(event, event.command is Command.AUTOCAST_ENABLE)
             return
         ownership = self._controllable_ownership()
+        if event.command is Command.STOP:
+            if not self._has_active_cast():
+                self._store_result(event, CommandResult.REFUSED_NOT_OWNED)
+                return
+            if self._autocast_enabled and self._history is not None:
+                try:
+                    await asyncio.to_thread(self._history.set_autocast_enabled, False)
+                except Exception:
+                    self._error = "history persistence failed"
+                    self._store_result(event, CommandResult.FAILED)
+                    return
+            self._autocast_enabled = False
+            self._error = None
+            self._active_command = (event, ownership)
+            await self._request_refresh(event.command.value)
+            return
         if ownership is None:
             self._store_result(event, CommandResult.REFUSED_NOT_OWNED)
             return
@@ -433,17 +449,29 @@ class Coordinator:
         self._store_result(event, CommandResult.APPLIED)
 
     async def _set_autocast(self, event: CommandEvent, enabled: bool) -> None:
-        if self._autocast_enabled is enabled:
+        autocast_changed = self._autocast_enabled is not enabled
+        rotation_changed = enabled and not self._rotation_enabled
+        if not autocast_changed and not rotation_changed:
             self._store_result(event, CommandResult.ALREADY_APPLIED)
             return
         if self._history is not None:
             try:
-                await asyncio.to_thread(self._history.set_autocast_enabled, enabled)
+                if rotation_changed:
+                    await asyncio.to_thread(self._history.set_rotation_enabled, True)
+                if autocast_changed:
+                    await asyncio.to_thread(self._history.set_autocast_enabled, enabled)
             except Exception:
+                if rotation_changed:
+                    try:
+                        await asyncio.to_thread(self._history.set_rotation_enabled, False)
+                    except Exception:
+                        pass
                 self._error = "history persistence failed"
                 self._store_result(event, CommandResult.FAILED)
                 return
         self._autocast_enabled = enabled
+        if rotation_changed:
+            self._rotation_enabled = True
         self._error = None
         owned = self._ownership_current()
         self._invalidate_work(preserve_expected=owned is not None)
@@ -636,18 +664,22 @@ class Coordinator:
         elif purpose == "seek" and self._active_ownership_matches():
             self.state = State.OWNED
             self._begin_preparation("next")
-        elif purpose == "stop" and self._active_ownership_matches():
-            try:
-                stopped = await self._cast.stop_media(self._generation)
-            except Exception:
-                stopped = False
-            self._complete_active(CommandResult.APPLIED if stopped else CommandResult.FAILED)
-            if stopped:
-                self._invalidate_work()
-                self._receiver = self._media = None
-                self.state = State.SYNCHRONIZING
+        elif purpose == "stop":
+            if not self._has_active_cast():
+                self._complete_active(CommandResult.ALREADY_APPLIED)
+                await self._classify()
             else:
-                self._enter_cooldown()
+                try:
+                    stopped = await self._cast.stop_cast(self._generation)
+                except Exception:
+                    stopped = False
+                self._complete_active(CommandResult.APPLIED if stopped else CommandResult.FAILED)
+                if stopped:
+                    self._invalidate_work()
+                    self._receiver = self._media = None
+                    self.state = State.SYNCHRONIZING
+                else:
+                    self._enter_cooldown()
         elif purpose == "autocast_disable" and self._active_ownership_matches():
             try:
                 stopped = await self._cast.stop_cast(self._generation)
@@ -884,6 +916,12 @@ class Coordinator:
             and media.media_session_id is None
             and media.content_id is None
         )
+
+    def _has_active_cast(self) -> bool:
+        if self._receiver is None or self._media is None or self._is_idle():
+            return False
+        receiver = self._receiver[0]
+        return receiver.app_id is not None and receiver.session_id is not None
 
     def _enter_cooldown(self) -> None:
         self._failure_count += 1

@@ -11,7 +11,7 @@ from PIL import Image, ImageChops
 
 from cast_immich.config import RelaySettings
 from cast_immich.immich import Preview
-from cast_immich.relay import ImageRelay
+from cast_immich.relay import ImageRelay, _draw_metadata
 
 ASSET_ID = UUID("12345678-1234-4234-8234-123456789abc")
 
@@ -20,6 +20,17 @@ def image_bytes(size: tuple[int, int] = (10, 10), image_format: str = "PNG") -> 
     output = io.BytesIO()
     Image.new("RGB", size, "red").save(output, format=image_format)
     return output.getvalue()
+
+
+def test_metadata_stays_inside_title_safe_right_margin() -> None:
+    image = Image.new("RGB", (1280, 720), "black")
+    original = image.copy()
+
+    _draw_metadata(image, "A fairly long location name", "July 17, 2026")
+
+    bounds = ImageChops.difference(original, image).getbbox()
+    assert bounds is not None
+    assert bounds[2] <= image.width - min(image.size) // 20 + 1
 
 
 class Source:
