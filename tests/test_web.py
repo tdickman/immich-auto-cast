@@ -203,6 +203,9 @@ async def test_dashboard_assets_expose_complete_operator_interface(
     assert 'name="immich.api_key" type="password"' in html
     assert 'id="output-list"' in html
     assert 'id="selected-workspace"' in html
+    assert "Your photos" not in html
+    assert 'id="cast-state"' not in html
+    assert 'value === "owned" ? "Ready"' in javascript
     assert "X-CSRF-Token" in javascript
     assert "output?.available_actions?.[command] === true" in javascript
     assert 'command === "reconnect" ? {} : { request_id: requestId }' in javascript

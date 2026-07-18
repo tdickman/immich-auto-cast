@@ -67,7 +67,6 @@ h2 { margin: 0; font-size: 2rem; letter-spacing: -.025em; }
 .stage-note { max-width: 32rem; margin: 2rem 0 0; color: var(--muted); line-height: 1.55; }
 .control-console { display: flex; flex-direction: column; justify-content: space-between; padding: clamp(2rem, 5vw, 4rem); color: #f7f6f2; }
 .readout-label { color: #9ca49f; font: .65rem var(--mono); text-transform: uppercase; letter-spacing: .14em; }
-.receiver-readout strong { display: block; margin: .65rem 0 .3rem; font: 400 clamp(2.2rem, 4vw, 3.8rem)/1 var(--display); }
 #cast-detail { color: #b8bfba; }
 #autocast-status { display: block; margin-top: .35rem; color: #ff9b80; font: .72rem var(--mono); }
 .source-control { margin-top: 1.5rem; color: #b8bfba; }
@@ -151,7 +150,6 @@ input:focus, select:focus { border-color: var(--accent); outline: 0; box-shadow:
   .control-stage { grid-template-columns: 1fr; min-height: 0; border-radius: 18px; }
   .stage-copy { padding: 2.5rem 1.5rem; }
   .control-console { padding: 1.5rem; }
-  .receiver-readout strong { font-size: 2.5rem; }
   .gallery-grid, .settings-grid, .advanced-grid { grid-template-columns: 1fr; }
   .output-fields, .advanced-output-fields { grid-template-columns: 1fr 1fr; }
   .gallery-grid { gap: .75rem; margin-top: .75rem; }

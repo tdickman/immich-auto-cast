@@ -89,7 +89,8 @@ function setSelectedOutput(outputId) {
 }
 
 function outputStateLabel(output) {
-  return titleCase(output.coordinator?.state || state.mode);
+  const value = output.coordinator?.state || state.mode;
+  return value === "owned" ? "Ready" : titleCase(value);
 }
 
 function makeQuickButton(output, command, label, mark) {
@@ -172,7 +173,6 @@ function renderSelectedWorkspace() {
   document.querySelector("#current-title").textContent = `Now showing / ${output.name || output.id}`;
   document.querySelector("#history-title").textContent = `Previous / ${output.name || output.id}`;
   document.querySelector("#upcoming-title").textContent = `Up next / ${output.name || output.id}`;
-  document.querySelector("#cast-state").textContent = outputStateLabel(output);
   document.querySelector("#cast-detail").textContent = active
     ? rotationIsEnabled ? "Automatic rotation is on" : "Automatic rotation is paused"
     : "Open settings to finish setup";
