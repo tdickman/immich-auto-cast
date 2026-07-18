@@ -501,7 +501,7 @@ def _draw_metadata(image: Image.Image, location: str | None, date: str | None) -
     draw = ImageDraw.Draw(image, "RGBA")
     font = ImageFont.load_default(size=max(12, min(image.size) // 28))
     padding = max(6, min(image.size) // 80)
-    margin = max(12, min(image.size) // 20)
+    margin = max(12, min(image.size) // 18)
     available_width = max(1, image.width - (margin + padding) * 2)
     for index, label in enumerate(labels):
         while len(label) > 4 and draw.textlength(label, font=font) > available_width:
