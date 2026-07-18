@@ -321,6 +321,8 @@ class Coordinator:
             if source is not None
             else PhotoSource()
         )
+        if normalized.kind is SourceKind.VIDEO:
+            return False
         await self.queue.put(SourceEvent(normalized, completion))
         return await completion
 
@@ -396,9 +398,7 @@ class Coordinator:
                 state.source_country,
             )
             if self._source.kind is SourceKind.VIDEO:
-                self._source = replace(
-                    self._source, max_video_duration=self._settings.video_max_duration
-                )
+                self._source = PhotoSource()
             recent = state.recent_asset_ids or tuple(record.asset_id for record in state.records)
             self._recent.extend(UUID(asset_id) for asset_id in reversed(recent))
         except Exception:

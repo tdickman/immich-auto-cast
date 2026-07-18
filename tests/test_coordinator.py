@@ -791,6 +791,20 @@ async def test_persisted_source_and_recent_assets_are_restored() -> None:
 
 
 @pytest.mark.asyncio
+async def test_persisted_video_source_falls_back_to_image_timeline() -> None:
+    history = History()
+    history.source = PhotoSource(SourceKind.VIDEO)
+    coordinator, queue, _selector, _cast = make_coordinator(history)
+
+    await observe_idle(coordinator)
+    await drain_one(queue, coordinator)
+
+    assert coordinator.snapshot.source_kind is SourceKind.TIMELINE
+    assert await coordinator.select_source(PhotoSource(SourceKind.VIDEO)) is False
+    await coordinator.close()
+
+
+@pytest.mark.asyncio
 async def test_attention_immich_failure_retries_instead_of_becoming_protected() -> None:
     class RecoveringRelay(Relay):
         def __init__(self) -> None:

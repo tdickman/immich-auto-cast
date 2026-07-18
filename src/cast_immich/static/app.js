@@ -888,10 +888,9 @@ document.querySelector("#stop-button").addEventListener("click", () => performCo
 document.querySelector("#source-kind").addEventListener("change", event => {
   const outputId = state.selectedOutputId;
   const kind = event.currentTarget.value;
-  sourceDraft(outputId).pendingKind = ["timeline", "video"].includes(kind) ? null : kind;
+  sourceDraft(outputId).pendingKind = kind === "timeline" ? null : kind;
   showSourceControl(kind);
   if (kind === "timeline") applySource(outputId, { kind }, "Using the full timeline");
-  else if (kind === "video") applySource(outputId, { kind }, "Using short videos only");
   else if (kind.startsWith("event:") && kind !== "event:recent_person_recap") {
     const collection = kind.slice("event:".length);
     applySource(outputId, { kind: "event", collection }, `Using ${event.currentTarget.selectedOptions[0].textContent}`);

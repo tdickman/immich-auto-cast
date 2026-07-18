@@ -261,8 +261,8 @@ async def test_dashboard_assets_expose_complete_operator_interface(
     assert css.count("object-fit: contain") == 2
     assert "object-fit: cover" not in css
     assert 'id="stop-button"' in html
-    assert '<option value="video">Videos only</option>' in html
-    assert 'else if (kind === "video") applySource' in javascript
+    assert '<option value="video" disabled>Videos only (temporarily unavailable)</option>' in html
+    assert 'else if (kind === "video") applySource' not in javascript
     assert 'outputField("Maximum video seconds", "video_max_duration"' in javascript
     assert 'outputField("Mute videos", "video_muted"' in javascript
     assert 'id="reconnect-button"' not in html
@@ -488,6 +488,25 @@ async def test_event_and_filter_sources_are_structured(
     assert supervisor.source_calls[0].collection.value == "on_this_day"
     assert supervisor.source_calls[1].start_date.isoformat() == "2020-01-02"
     assert supervisor.source_calls[1].city == "Bath"
+
+
+async def test_video_source_is_temporarily_unavailable(
+    management: tuple[TestClient[Any, Any], FakeSupervisor, str],
+) -> None:
+    client, supervisor, origin = management
+
+    response = await client.post(
+        "/api/outputs/living-room/source",
+        headers=mutation_headers(origin),
+        json={"kind": "video"},
+    )
+
+    assert response.status == 409
+    assert await response.json() == {
+        "outcome": "feature_unavailable",
+        "error": "video casting is temporarily unavailable",
+    }
+    assert supervisor.source_calls == []
 
 
 async def test_history_is_opaque_and_thumbnail_rejects_arbitrary_ids(

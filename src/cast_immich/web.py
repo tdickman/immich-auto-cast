@@ -277,6 +277,12 @@ def create_management_app(
             kind = SourceKind(kind_value or "timeline")
         except (TypeError, ValueError):
             return _error(400, "invalid_request", "unknown photo source kind")
+        if kind is SourceKind.VIDEO:
+            return _error(
+                409,
+                "feature_unavailable",
+                "video casting is temporarily unavailable",
+            )
         source_id: UUID | None = None
         query: str | None = None
         collection: EventCollection | None = None
