@@ -11,6 +11,7 @@ from cast_immich.config import ImmichSettings
 from cast_immich.immich import (
     AssetUnavailable,
     ImmichClient,
+    ImmichFailureKind,
     PermanentImmichError,
     PhotoSource,
     SourceKind,
@@ -269,8 +270,9 @@ async def test_authentication_failure_is_permanent(serve_app: Any) -> None:
     server = await serve_app(app)
     settings = ImmichSettings(str(server.make_url("/")).rstrip("/"), "secret", 2, 1)
     async with ImmichClient(settings) as client:
-        with pytest.raises(PermanentImmichError, match="permissions"):
+        with pytest.raises(PermanentImmichError, match="permissions") as raised:
             await client.select_asset(set(), 10)
+    assert raised.value.kind is ImmichFailureKind.AUTHORIZATION
 
 
 @pytest.mark.asyncio
@@ -285,3 +287,36 @@ async def test_incompatible_search_endpoint_is_permanent(serve_app: Any) -> None
     async with ImmichClient(settings) as client:
         with pytest.raises(PermanentImmichError, match="rejected"):
             await client.select_asset(set(), 10)
+
+
+@pytest.mark.asyncio
+async def test_arbitrary_5xx_recovers_within_bounded_retries(serve_app: Any) -> None:
+    attempts = 0
+
+    async def search(_request: web.Request) -> web.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return web.Response(status=507)
+        return web.json_response(
+            [
+                {
+                    "id": str(ASSET_ID),
+                    "type": "IMAGE",
+                    "visibility": "timeline",
+                    "isArchived": False,
+                    "isTrashed": False,
+                    "isOffline": False,
+                }
+            ]
+        )
+
+    app = web.Application()
+    app.router.add_post("/api/search/random", search)
+    server = await serve_app(app)
+    settings = ImmichSettings(str(server.make_url("/")).rstrip("/"), "secret", 2, 2)
+    async with ImmichClient(settings) as client:
+        selected = await client.select_asset(set(), 10)
+
+    assert selected.id == ASSET_ID
+    assert attempts == 2

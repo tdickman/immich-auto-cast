@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -54,6 +55,26 @@ def test_installation_identity_persists(tmp_path: Path) -> None:
     first = load_settings(path)
     second = load_settings(path)
     assert first.service.installation_id == second.service.installation_id
+
+
+def test_installation_identity_creation_fsyncs_file_and_parent_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(config_text(), encoding="utf-8")
+    synced: list[Path] = []
+    real_fsync = os.fsync
+
+    def track_fsync(descriptor: int) -> None:
+        synced.append(Path(f"/proc/self/fd/{descriptor}").resolve())
+        real_fsync(descriptor)
+
+    monkeypatch.setattr("cast_immich.config.os.fsync", track_fsync)
+    load_settings(path)
+
+    assert tmp_path in synced
+    assert any(item.parent == tmp_path and item.name.startswith(".identity.") for item in synced)
+    assert (tmp_path / "identity").stat().st_mode & 0o777 == 0o600
 
 
 @pytest.mark.parametrize("host", ["127.0.0.1", "::1", "0.0.0.0", "localhost", "bad host"])
@@ -278,6 +299,26 @@ def test_replace_failure_preserves_previous_configuration(
         save_settings(path, document.form_values, expected_revision=0, environ={})
 
     assert path.read_bytes() == before
+
+
+def test_configuration_write_fsyncs_file_and_parent_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(config_text(), encoding="utf-8")
+    document = load_editable_settings(path, {})
+    synced: list[Path] = []
+    real_fsync = os.fsync
+
+    def track_fsync(descriptor: int) -> None:
+        synced.append(Path(f"/proc/self/fd/{descriptor}").resolve())
+        real_fsync(descriptor)
+
+    monkeypatch.setattr("cast_immich.config.os.fsync", track_fsync)
+    save_settings(path, document.form_values, expected_revision=0, environ={})
+
+    assert tmp_path in synced
+    assert any(item.parent == tmp_path and item.name.startswith(".config.toml.") for item in synced)
 
 
 def test_rollback_never_overwrites_a_newer_external_write(tmp_path: Path) -> None:

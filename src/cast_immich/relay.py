@@ -7,7 +7,7 @@ import secrets
 import time
 from collections import OrderedDict
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol
 from uuid import UUID
 
@@ -49,6 +49,7 @@ class Capability:
     asset_id: UUID
     expires_at: float
     preview: Preview
+    pinned: bool = False
 
 
 class ImageRelay:
@@ -83,8 +84,21 @@ class ImageRelay:
         self._purge()
         target._purge()
         target._tokens.update(self._tokens)
-        while len(target._tokens) > target._max_tokens:
-            target._tokens.popitem(last=False)
+        target._trim_tokens()
+
+    def confirm(self, url: str) -> None:
+        token = self._token_from_url(url)
+        capability = self._tokens.get(token)
+        if capability is not None:
+            self._tokens[token] = replace(capability, pinned=True)
+            self._tokens.move_to_end(token)
+
+    def retire(self, url: str) -> None:
+        token = self._token_from_url(url)
+        capability = self._tokens.get(token)
+        if capability is not None:
+            self._tokens[token] = replace(capability, pinned=False)
+        self._purge()
 
     async def preload(self, asset_id: UUID) -> None:
         """Fetch and normalize an image before the receiver needs it."""
@@ -101,8 +115,7 @@ class ImageRelay:
         self._tokens[token] = Capability(
             asset_id, self._clock() + self._settings.token_lifetime, preview
         )
-        while len(self._tokens) > self._max_tokens:
-            self._tokens.popitem(last=False)
+        self._trim_tokens()
         return f"{self._settings.advertised_base_url}/image/{token}", preview.content_type
 
     async def _get_preview(self, asset_id: UUID) -> Preview:
@@ -183,7 +196,7 @@ class ImageRelay:
         if request.method not in {"GET", "HEAD"}:
             return web.Response(status=405, headers={"Allow": "GET, HEAD", **SAFE_HEADERS})
         capability = self._tokens.get(request.match_info["token"])
-        if capability is None or capability.expires_at <= self._clock():
+        if capability is None or (not capability.pinned and capability.expires_at <= self._clock()):
             return web.Response(status=404, headers=SAFE_HEADERS)
         preview = capability.preview
         if preview.content_type not in ALLOWED_IMAGE_TYPES:
@@ -194,9 +207,27 @@ class ImageRelay:
 
     def _purge(self) -> None:
         now = self._clock()
-        expired = [token for token, item in self._tokens.items() if item.expires_at <= now]
+        expired = [
+            token
+            for token, item in self._tokens.items()
+            if not item.pinned and item.expires_at <= now
+        ]
         for token in expired:
             self._tokens.pop(token, None)
+
+    def _trim_tokens(self) -> None:
+        while len(self._tokens) > self._max_tokens:
+            removable = next(
+                (token for token, capability in self._tokens.items() if not capability.pinned),
+                None,
+            )
+            if removable is None:
+                break
+            self._tokens.pop(removable)
+
+    def _token_from_url(self, url: str) -> str:
+        prefix = f"{self._settings.advertised_base_url}/image/"
+        return url.removeprefix(prefix) if url.startswith(prefix) else ""
 
 
 def _normalize_preview(

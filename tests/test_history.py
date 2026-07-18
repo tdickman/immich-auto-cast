@@ -99,8 +99,10 @@ def test_history_json_is_versioned_and_contains_no_extra_records(tmp_path: Path)
     store.record_display("load-1", "asset-1")
 
     persisted = json.loads(path.read_text(encoding="utf-8"))
-    assert persisted["version"] == 2
+    assert persisted["version"] == 3
     assert persisted["outputs"]["default"]["rotation_enabled"] is True
+    assert persisted["outputs"]["default"]["source_kind"] == "timeline"
+    assert persisted["outputs"]["default"]["recent_asset_ids"] == ["asset-1"]
     assert len(persisted["outputs"]["default"]["records"]) == 1
 
 
@@ -133,5 +135,134 @@ def test_v1_maps_to_default_and_is_not_rewritten_until_mutation(tmp_path: Path) 
 
     store.for_output("other").set_autocast_enabled(False)
     document = json.loads(path.read_text())
-    assert document["version"] == 2
+    assert document["version"] == 3
     assert document["outputs"]["default"]["rotation_enabled"] is False
+
+
+def test_v2_loads_with_v3_defaults_and_upgrades_on_mutation(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    original = b'{"version":2,"outputs":{"office":{"rotation_enabled":true,"records":[]}}}\n'
+    path.write_bytes(original)
+    office = HistoryStore(path).for_output("office")
+
+    state = office.load()
+    assert state.source_kind == "timeline"
+    assert state.source_id is None
+    assert state.source_query is None
+    assert state.recent_asset_ids == ()
+    assert path.read_bytes() == original
+
+    office.set_rotation_enabled(False)
+    assert json.loads(path.read_text())["version"] == 3
+
+
+def test_source_selection_persists_as_validated_primitives(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    history = HistoryStore(path).for_output("office")
+    source_id = "12345678-1234-4234-8234-123456789ABC"
+
+    album = history.set_source("album", source_id)
+    assert album.source_kind == "album"
+    assert album.source_id == source_id.lower()
+    assert album.source_query is None
+
+    search = history.set_source("search", query="  summer holiday  ")
+    assert search.source_kind == "search"
+    assert search.source_id is None
+    assert search.source_query == "summer holiday"
+    assert HistoryStore(path).for_output("office").load() == search
+    persisted = json.loads(path.read_text())["outputs"]["office"]
+    assert persisted["source_kind"] == "search"
+    assert persisted["source_id"] is None
+    assert persisted["source_query"] == "summer holiday"
+
+
+@pytest.mark.parametrize(
+    ("kind", "source_id", "query"),
+    [
+        ("unknown", None, None),
+        ("timeline", "unexpected", None),
+        ("album", "not-a-uuid", None),
+        ("person", None, None),
+        ("search", None, "   "),
+        ("search", None, "x" * 201),
+    ],
+)
+def test_invalid_source_is_rejected_without_overwrite(
+    tmp_path: Path, kind: str, source_id: str | None, query: str | None
+) -> None:
+    path = tmp_path / "state.json"
+    history = HistoryStore(path)
+    history.set_rotation_enabled(False)
+    before = path.read_bytes()
+
+    with pytest.raises(HistoryError):
+        history.set_source(kind, source_id, query)
+
+    assert path.read_bytes() == before
+
+
+def test_record_display_atomically_updates_bounded_unique_recent_assets(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    store = HistoryStore(path)
+    store.MAX_RECENT_ASSETS = 3
+
+    store.record_display("load-1", "asset-1")
+    store.record_display("load-2", "asset-2")
+    store.record_display("load-3", "asset-1")
+    store.record_display("load-4", "asset-3")
+    store.record_display("load-5", "asset-4")
+
+    assert store.load().recent_asset_ids == ("asset-4", "asset-3", "asset-1")
+    persisted = json.loads(path.read_text())["outputs"]["default"]
+    assert persisted["recent_asset_ids"] == ["asset-4", "asset-3", "asset-1"]
+
+
+def test_rejects_malformed_v3_recent_and_source_values(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 3,
+                "outputs": {
+                    "default": {
+                        "rotation_enabled": True,
+                        "records": [],
+                        "source_kind": "album",
+                        "source_id": 123,
+                        "source_query": None,
+                        "recent_asset_ids": ["duplicate", "duplicate"],
+                    }
+                },
+            }
+        )
+    )
+
+    with pytest.raises(HistoryError, match="cannot read history state"):
+        HistoryStore(path).load()
+
+
+@pytest.mark.parametrize("version", [True, 2.0, "3"])
+def test_rejects_non_integer_schema_versions(tmp_path: Path, version: object) -> None:
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps({"version": version, "outputs": {}}))
+
+    with pytest.raises(HistoryError, match="cannot read history state"):
+        HistoryStore(path).load()
+
+
+def test_history_write_fsyncs_file_and_parent_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    synced: list[Path] = []
+    real_fsync = __import__("os").fsync
+
+    def track_fsync(descriptor: int) -> None:
+        synced.append(Path(f"/proc/self/fd/{descriptor}").resolve())
+        real_fsync(descriptor)
+
+    monkeypatch.setattr("cast_immich.history.os.fsync", track_fsync)
+    HistoryStore(tmp_path / "state.json").set_rotation_enabled(False)
+
+    assert tmp_path in synced
+    assert any(path.parent == tmp_path and path.name.startswith(".state.json.") for path in synced)

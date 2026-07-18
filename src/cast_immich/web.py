@@ -578,6 +578,14 @@ def _coordinator_json(snapshot: CoordinatorSnapshot | None) -> dict[str, Any] | 
         "rotation_enabled": snapshot.rotation_enabled,
         "generation": snapshot.generation,
         "error": snapshot.error,
+        "health": snapshot.health.value,
+        "health_reason": snapshot.health_reason,
+        "health_message": snapshot.health_message,
+        "retry_remaining_seconds": (
+            max(0.0, snapshot.retry_deadline - time.monotonic())
+            if snapshot.retry_deadline is not None
+            else None
+        ),
         "last_display_event_id": (
             snapshot.last_display.event_id if snapshot.last_display is not None else None
         ),

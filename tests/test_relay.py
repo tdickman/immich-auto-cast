@@ -209,6 +209,40 @@ async def test_unknown_expired_and_unsupported_tokens_are_safe(serve_app: Any) -
 
 
 @pytest.mark.asyncio
+async def test_confirmed_capability_survives_expiry_until_retired(serve_app: Any) -> None:
+    now = [10.0]
+    relay = ImageRelay(
+        settings(),
+        Source(Preview(image_bytes(image_format="JPEG"), "image/jpeg")),
+        clock=lambda: now[0],
+    )
+    public_url, _ = await relay.mint(ASSET_ID)
+    token = public_url.rsplit("/", 1)[1]
+    relay.confirm(public_url)
+    server = await serve_app(relay.app)
+
+    now[0] = 100.0
+    async with aiohttp.ClientSession() as session:
+        assert (await session.get(server.make_url(f"/image/{token}"))).status == 200
+        relay.retire(public_url)
+        assert (await session.get(server.make_url(f"/image/{token}"))).status == 404
+
+
+@pytest.mark.asyncio
+async def test_pinned_capability_is_not_evicted_by_speculative_mints() -> None:
+    class MultiSource:
+        async def fetch_preview(self, asset_id: UUID, max_bytes: int | None = None) -> Preview:
+            return Preview(image_bytes(), "image/png")
+
+    relay = ImageRelay(settings(), MultiSource(), max_tokens=1)
+    pinned_url, _ = await relay.mint(ASSET_ID)
+    relay.confirm(pinned_url)
+    await relay.mint(UUID(int=2))
+
+    assert pinned_url.rsplit("/", 1)[1] in relay._tokens
+
+
+@pytest.mark.asyncio
 async def test_non_image_is_rejected_before_url_is_minted() -> None:
     relay = ImageRelay(settings(), Source(Preview(b"html", "text/html")))
     with pytest.raises(Exception, match="supported image"):

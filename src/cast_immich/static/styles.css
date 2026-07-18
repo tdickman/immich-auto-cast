@@ -34,6 +34,8 @@ button:disabled { cursor: not-allowed; opacity: .4; }
 .service-signal { display: flex; align-items: center; gap: .55rem; color: var(--muted); font: 650 .68rem/1 var(--mono); text-transform: uppercase; letter-spacing: .08em; }
 .signal-dot { width: 8px; height: 8px; border-radius: 50%; background: #9ca29e; }
 .signal-dot.active { background: var(--green); box-shadow: 0 0 0 4px rgba(63, 139, 98, .13); }
+.signal-dot.degraded { background: #d69822; box-shadow: 0 0 0 4px rgba(214, 152, 34, .14); }
+.signal-dot.attention { background: var(--accent); box-shadow: 0 0 0 4px rgba(229, 92, 56, .14); }
 .signal-dot.error { background: var(--accent); }
 
 main { width: min(1240px, calc(100% - 2.5rem)); margin: 2rem auto 4rem; }

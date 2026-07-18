@@ -13,12 +13,32 @@ import aiohttp
 from .config import ImmichSettings
 
 
+class ImmichFailureKind(StrEnum):
+    UNAVAILABLE = "unavailable"
+    RATE_LIMITED = "rate_limited"
+    AUTHORIZATION = "authorization"
+    REQUEST_REJECTED = "request_rejected"
+    INCOMPATIBLE_RESPONSE = "incompatible_response"
+    ASSET_UNAVAILABLE = "asset_unavailable"
+
+
 class ImmichError(RuntimeError):
     """Base error for Immich operations."""
+
+    def __init__(self, message: str, kind: ImmichFailureKind = ImmichFailureKind.UNAVAILABLE):
+        super().__init__(message)
+        self.kind = kind
 
 
 class PermanentImmichError(ImmichError):
     """Authentication, permission, or API compatibility is invalid."""
+
+    def __init__(
+        self,
+        message: str,
+        kind: ImmichFailureKind = ImmichFailureKind.INCOMPATIBLE_RESPONSE,
+    ) -> None:
+        super().__init__(message, kind)
 
 
 class TransientImmichError(ImmichError):
@@ -27,6 +47,9 @@ class TransientImmichError(ImmichError):
 
 class AssetUnavailable(ImmichError):
     """No usable asset or preview is currently available."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, ImmichFailureKind.ASSET_UNAVAILABLE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,26 +285,46 @@ class ImmichClient:
             try:
                 return await response.json()
             except (aiohttp.ContentTypeError, ValueError):
-                raise PermanentImmichError("Immich returned malformed JSON") from None
+                raise PermanentImmichError(
+                    "Immich returned malformed JSON", ImmichFailureKind.INCOMPATIBLE_RESPONSE
+                ) from None
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> aiohttp.ClientResponse:
         session = self._require_session()
         url = f"{self._settings.url}{path}"
         last_error: BaseException | None = None
         for attempt in range(self._settings.retry_attempts):
+            retry_after: str | None = None
             try:
                 response = await session.request(method, url, allow_redirects=False, **kwargs)
-                if response.status not in {429, 500, 502, 503, 504}:
+                if response.status != 408 and response.status != 429 and response.status < 500:
                     return response
                 last_error = TransientImmichError(
-                    f"Immich temporarily unavailable ({response.status})"
+                    f"Immich temporarily unavailable ({response.status})",
+                    ImmichFailureKind.RATE_LIMITED
+                    if response.status == 429
+                    else ImmichFailureKind.UNAVAILABLE,
                 )
+                retry_after = response.headers.get("Retry-After")
                 response.release()
             except (aiohttp.ClientError, TimeoutError) as error:
                 last_error = error
             if attempt + 1 < self._settings.retry_attempts:
-                await asyncio.sleep(min(0.25 * (2**attempt) + random.random() * 0.1, 2.0))
-        raise TransientImmichError("Immich request failed after bounded retries") from last_error
+                delay = min(0.25 * (2**attempt) + random.random() * 0.1, 2.0)
+                if retry_after is not None:
+                    try:
+                        delay = min(max(float(retry_after), 0.0), 5.0)
+                    except ValueError:
+                        pass
+                await asyncio.sleep(delay)
+        kind = (
+            last_error.kind
+            if isinstance(last_error, ImmichError)
+            else ImmichFailureKind.UNAVAILABLE
+        )
+        raise TransientImmichError(
+            "Immich request failed after bounded retries", kind
+        ) from last_error
 
     def _require_session(self) -> aiohttp.ClientSession:
         if self._session is None:
@@ -291,9 +334,14 @@ class ImmichClient:
     @staticmethod
     def _raise_for_status(status: int) -> None:
         if status in {401, 403}:
-            raise PermanentImmichError("Immich API key is invalid or lacks required permissions")
+            raise PermanentImmichError(
+                "Immich API key is invalid or lacks required permissions",
+                ImmichFailureKind.AUTHORIZATION,
+            )
         if 400 <= status < 500 and status not in {408, 429}:
-            raise PermanentImmichError(f"Immich rejected the request ({status})")
+            raise PermanentImmichError(
+                f"Immich rejected the request ({status})", ImmichFailureKind.REQUEST_REJECTED
+            )
         if status < 200 or status >= 300:
             raise TransientImmichError(f"Immich request failed ({status})")
 

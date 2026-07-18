@@ -12,7 +12,7 @@ from cast_immich.cast import CastEvent, EventKind, MediaStatus, ReceiverStatus
 from cast_immich.config import RotationSettings
 from cast_immich.coordinator import Command, CommandResult, Coordinator, State
 from cast_immich.history import DisplayRecord, HistoryState
-from cast_immich.immich import Asset
+from cast_immich.immich import Asset, PermanentImmichError, PhotoSource, SourceKind
 
 INSTALLATION_ID = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
 ASSET_ID = UUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
@@ -21,21 +21,32 @@ ASSET_ID = UUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
 class Selector:
     def __init__(self) -> None:
         self.calls = 0
+        self.recent: set[UUID] = set()
 
     async def select_assets(
         self, recent: set[UUID], batch_size: int, count: int
     ) -> tuple[Asset, ...]:
         self.calls += 1
+        self.recent = recent
         return (Asset(ASSET_ID),)
 
 
 class Relay:
+    def __init__(self) -> None:
+        self.confirmed: list[str] = []
+        self.retired: list[str] = []
+
     async def preload(self, asset_id: UUID) -> None:
         pass
 
     async def mint(self, asset_id: UUID) -> tuple[str, str]:
-        assert asset_id == ASSET_ID
         return "http://192.168.1.5:8787/image/opaque", "image/webp"
+
+    def confirm(self, url: str) -> None:
+        self.confirmed.append(url)
+
+    def retire(self, url: str) -> None:
+        self.retired.append(url)
 
 
 class Cast:
@@ -72,12 +83,18 @@ class History:
         self.autocast = autocast
         self.fail_records = fail_records
         self.records: list[DisplayRecord] = []
+        self.source = PhotoSource()
+        self.recent: tuple[str, ...] = ()
 
     def load(self) -> HistoryState:
         return HistoryState(
             rotation_enabled=self.enabled,
             records=tuple(self.records),
             autocast_enabled=self.autocast,
+            source_kind=self.source.kind.value,
+            source_id=str(self.source.id) if self.source.id is not None else None,
+            source_query=self.source.query,
+            recent_asset_ids=self.recent,
         )
 
     def set_rotation_enabled(self, enabled: bool) -> HistoryState:
@@ -86,6 +103,14 @@ class History:
 
     def set_autocast_enabled(self, enabled: bool) -> HistoryState:
         self.autocast = enabled
+        return self.load()
+
+    def set_source(
+        self, kind: str, source_id: str | None = None, query: str | None = None
+    ) -> HistoryState:
+        self.source = PhotoSource(
+            SourceKind(kind), UUID(source_id) if source_id is not None else None, query
+        )
         return self.load()
 
     def record_display(self, load_id: str, asset_id: str) -> DisplayRecord:
@@ -448,7 +473,7 @@ async def test_seek_to_upcoming_photo_rebases_the_cast_order() -> None:
 @pytest.mark.asyncio
 async def test_seek_to_previous_photo_replays_forward_from_that_occurrence() -> None:
     older_id, newer_id = UUID(int=20), UUID(int=21)
-    history = History()
+    history = History(autocast=False)
     history.records = [
         DisplayRecord("newer", "newer-load", str(newer_id), datetime.now(UTC)),
         DisplayRecord("older", "older-load", str(older_id), datetime(2025, 1, 1, tzinfo=UTC)),
@@ -591,6 +616,101 @@ async def test_restart_recognizes_only_complete_persistent_markers() -> None:
     await coordinator.handle(event(EventKind.MEDIA, media=MediaStatus("PLAYING", url, 1, metadata)))
     assert coordinator.snapshot.state is State.OWNED
     assert cast.loads == []
+    await coordinator.close()
+
+
+@pytest.mark.asyncio
+async def test_restart_renews_owned_asset_with_a_fresh_relay_url() -> None:
+    coordinator, queue, _selector, cast = make_coordinator()
+    old_url = "http://192.168.1.5:8787/image/existing"
+    metadata = {
+        "schema": "cast-immich/v1",
+        "installationId": str(INSTALLATION_ID),
+        "loadId": "existing-load",
+        "contentUrl": old_url,
+        "assetId": str(ASSET_ID),
+    }
+    await coordinator.handle(event(EventKind.CONNECTED))
+    await coordinator.handle(
+        event(EventKind.RECEIVER, receiver=ReceiverStatus("CC1AD845", "session"))
+    )
+    await coordinator.handle(
+        event(EventKind.MEDIA, media=MediaStatus("PLAYING", old_url, 1, metadata))
+    )
+
+    await drain_one(queue, coordinator)
+    await coordinator.handle(
+        event(EventKind.RECEIVER, receiver=ReceiverStatus("CC1AD845", "session"))
+    )
+    await coordinator.handle(
+        event(EventKind.MEDIA, media=MediaStatus("PLAYING", old_url, 1, metadata))
+    )
+
+    assert len(cast.loads) == 1
+    assert cast.loads[0][3]["assetId"] == str(ASSET_ID)
+    assert cast.loads[0][1] != old_url
+    await coordinator.close()
+
+
+@pytest.mark.asyncio
+async def test_persisted_source_and_recent_assets_are_restored() -> None:
+    album_id = UUID(int=42)
+    history = History()
+    history.source = PhotoSource(SourceKind.ALBUM, album_id)
+    history.recent = (str(UUID(int=7)), str(UUID(int=8)))
+    coordinator, queue, selector, _cast = make_coordinator(history)
+
+    await observe_idle(coordinator)
+    await drain_one(queue, coordinator)
+    await send_idle_snapshot(coordinator)
+    await drain_one(queue, coordinator)
+
+    assert coordinator.snapshot.source_kind is SourceKind.ALBUM
+    assert coordinator.snapshot.selected_album == album_id
+    assert selector.recent == {UUID(int=7), UUID(int=8)}
+    await coordinator.close()
+
+
+@pytest.mark.asyncio
+async def test_attention_immich_failure_retries_instead_of_becoming_protected() -> None:
+    class RecoveringRelay(Relay):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        async def mint(self, asset_id: UUID) -> tuple[str, str]:
+            self.calls += 1
+            if self.calls == 1:
+                raise PermanentImmichError("temporary authorization failure")
+            return await super().mint(asset_id)
+
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    selector = Selector()
+    cast = Cast()
+    relay = RecoveringRelay()
+    coordinator = Coordinator(
+        queue,
+        selector,
+        relay,
+        cast,
+        RotationSettings(0.02, 0.001, 0.001, 5, 10, 0.001),
+        INSTALLATION_ID,
+        0.02,
+    )
+
+    await observe_idle(coordinator)
+    await drain_one(queue, coordinator)
+    await send_idle_snapshot(coordinator)
+    await drain_one(queue, coordinator)
+    assert coordinator.state is State.COOLDOWN
+    assert coordinator.snapshot.health.value == "attention"
+
+    await drain_one(queue, coordinator)
+    await send_idle_snapshot(coordinator)
+    await drain_one(queue, coordinator)
+    await send_idle_snapshot(coordinator)
+
+    assert cast.loads
     await coordinator.close()
 
 

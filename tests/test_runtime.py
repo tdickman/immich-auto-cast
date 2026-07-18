@@ -113,6 +113,8 @@ class FakeGraph:
         self.output_specs = settings.outputs
         self.commands: list[tuple[str, Command, str]] = []
         self.thumbnails: list[str] = []
+        self.exit = asyncio.Event()
+        self.exit_error: BaseException | None = None
 
     @property
     def coordinator_snapshot(self) -> CoordinatorSnapshot:
@@ -143,6 +145,11 @@ class FakeGraph:
         self.starts += 1
         if self.fail_start:
             raise OSError("start failed")
+
+    async def wait_for_coordinator_exit(self) -> None:
+        await self.exit.wait()
+        if self.exit_error is not None:
+            raise self.exit_error
 
     async def command(self, output_id: str, command: Command, request_id: str) -> CommandResult:
         assert output_id in {output.id for output in self.output_specs}
@@ -243,6 +250,24 @@ async def test_setup_candidate_activates_and_exposes_only_masked_configuration(
     assert supervisor.config_snapshot.form_values["immich"]["api_key"] == ""
     assert "secret-value" not in repr(supervisor.config_snapshot)
     assert factory.graphs[0].stages == factory.graphs[0].starts == 1
+    await supervisor.close()
+
+
+@pytest.mark.asyncio
+async def test_unexpected_coordinator_exit_is_fatal_to_the_runtime(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(config_text(), encoding="utf-8")
+    factory = Factory()
+    supervisor = RuntimeSupervisor(path, graph_factory=factory, environ={})
+    await supervisor.start()
+    graph = factory.graphs[0]
+    graph.exit_error = RuntimeError("coordinator crashed")
+    graph.exit.set()
+
+    with pytest.raises(RuntimeError, match="coordinator crashed"):
+        await asyncio.wait_for(supervisor.wait_for_failure(), 1)
+    assert supervisor.snapshot.mode is RuntimeMode.DEGRADED
+    assert supervisor.snapshot.error == "coordinator stopped unexpectedly"
     await supervisor.close()
 
 

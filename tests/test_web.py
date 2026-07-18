@@ -171,6 +171,10 @@ async def test_status_and_config_are_safe_and_setup_schema_is_complete(
         "rotation_enabled": True,
         "generation": 9,
         "error": None,
+        "health": "degraded",
+        "health_reason": "starting",
+        "health_message": "Connecting to Chromecast",
+        "retry_remaining_seconds": None,
         "last_display_event_id": None,
         "selected_album_id": None,
     }
@@ -206,8 +210,8 @@ async def test_dashboard_assets_expose_complete_operator_interface(
     assert '<link rel="icon" href="/favicon.svg" type="image/svg+xml">' in html
     assert favicon.content_type == "image/svg+xml"
     assert 'viewBox="0 0 64 64"' in icon
-    assert '#19201d' in icon
-    assert '#e55c38' in icon
+    assert "#19201d" in icon
+    assert "#e55c38" in icon
     assert 'name="immich.api_key" type="password"' in html
     assert 'aria-describedby="api-key-permissions key-status"' in html
     for permission in ("asset.read", "asset.view", "album.read", "person.read"):
@@ -257,7 +261,9 @@ async def test_dashboard_assets_expose_complete_operator_interface(
     assert 'output.autocast_enabled ? "Disable autocast" : "Enable autocast"' in javascript
     assert "output.autocast_remaining_seconds" in javascript
     assert "Autocast in ${remaining}s" in javascript
-    assert "window.setInterval(renderAutocastControl, 250)" in javascript
+    assert "if (state.disconnectedSince !== null) renderServiceSignal()" in javascript
+    assert "Dashboard connection lost" in javascript
+    assert "refreshCatalogs" in javascript
     assert "const canUseRotation = output.autocast_enabled" in javascript
     assert "rotation.disabled = !canUseRotation" in javascript
     assert 'performControl(state.selectedOutputId, "stop")' in javascript

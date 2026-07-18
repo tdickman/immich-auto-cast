@@ -38,6 +38,9 @@ async def test_run_from_path_starts_and_closes_management_before_supervisor(
         async def close(self) -> None:
             events.append("supervisor-close")
 
+        async def wait_for_failure(self) -> None:
+            await __import__("asyncio").Event().wait()
+
     class FakeManagement:
         def __init__(self, _supervisor: object, host: str, port: int) -> None:
             assert (host, port) == ("127.0.0.2", 9080)
@@ -56,3 +59,40 @@ async def test_run_from_path_starts_and_closes_management_before_supervisor(
     await run_from_path(tmp_path / "missing.toml", stop, web_host="127.0.0.2", web_port=9080)
 
     assert events == ["web-start", "supervisor-start", "web-close", "supervisor-close"]
+
+
+@pytest.mark.asyncio
+async def test_run_from_path_propagates_runtime_failure_after_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[str] = []
+
+    class FakeSupervisor:
+        def __init__(self, _path: Path) -> None:
+            self.config_snapshot = None
+
+        async def start(self) -> object:
+            return type("Snapshot", (), {"mode": type("Mode", (), {"value": "setup"})()})()
+
+        async def wait_for_failure(self) -> None:
+            raise RuntimeError("coordinator crashed")
+
+        async def close(self) -> None:
+            events.append("supervisor-close")
+
+    class FakeManagement:
+        def __init__(self, _supervisor: object, _host: str, _port: int) -> None:
+            pass
+
+        async def start(self) -> None:
+            events.append("web-start")
+
+        async def close(self) -> None:
+            events.append("web-close")
+
+    monkeypatch.setattr("cast_immich.app.RuntimeSupervisor", FakeSupervisor)
+    monkeypatch.setattr("cast_immich.app.ManagementServer", FakeManagement)
+
+    with pytest.raises(RuntimeError, match="coordinator crashed"):
+        await run_from_path(tmp_path / "config.toml")
+    assert events == ["web-start", "web-close", "supervisor-close"]

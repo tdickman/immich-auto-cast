@@ -194,17 +194,33 @@ def _revision(value: Any) -> int:
 
 
 def _load_installation_id(path: Path) -> UUID:
+    temporary: Path | None = None
     try:
         if path.exists():
             return UUID(path.read_text(encoding="ascii").strip())
         identity = uuid4()
         path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-        temporary.write_text(f"{identity}\n", encoding="ascii")
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+        )
+        temporary = Path(temporary_name)
+        os.chmod(temporary, 0o600)
+        with os.fdopen(descriptor, "w", encoding="ascii") as output:
+            output.write(f"{identity}\n")
+            output.flush()
+            os.fsync(output.fileno())
         os.replace(temporary, path)
+        temporary = None
+        _fsync_directory(path.parent)
         return identity
     except (OSError, ValueError) as error:
         raise ConfigError(f"cannot load service.installation_id_file: {error}") from None
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
 
 
 def _read_configuration(path: Path) -> dict[str, Any]:
@@ -525,6 +541,7 @@ def _atomic_write(path: Path, content: str) -> None:
             os.fsync(output.fileno())
         os.replace(temporary, path)
         temporary = None
+        _fsync_directory(path.parent)
     except OSError:
         raise ConfigPersistenceError("cannot persist configuration") from None
     finally:
@@ -533,6 +550,14 @@ def _atomic_write(path: Path, content: str) -> None:
                 temporary.unlink()
             except OSError:
                 pass
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def save_settings(
@@ -696,6 +721,7 @@ def restore_settings(candidate: SettingsCandidate) -> None:
     if candidate.previous_content is None:
         try:
             candidate.path.unlink()
+            _fsync_directory(candidate.path.parent)
         except FileNotFoundError:
             pass
         except OSError:

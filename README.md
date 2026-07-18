@@ -50,7 +50,11 @@ sudo systemctl restart cast-immich
 sudo cast-immich-update
 ```
 
-`cast-immich-update` performs a fast-forward-only pull from the branch's configured Git upstream, synchronizes dependencies from `uv.lock`, and restarts the service. Local configuration, installation identity, and state are ignored by Git and remain in the checkout. Re-run the installer if a release changes the systemd installation itself.
+`cast-immich-update` performs a fast-forward-only pull from the branch's configured Git upstream, synchronizes dependencies from `uv.lock`, and restarts the service. Local configuration, installation identity, and state are ignored by Git and remain in the checkout. Re-run the installer if a release changes the systemd installation itself. Back up `config.toml`, `installation-id`, and `state.json`; restoring all three preserves configuration, ownership identity, pause/autocast settings, selected sources, recent-image exclusion, and bounded display history.
+
+`network-online.target` only orders startup; it does not guarantee that Wi-Fi, Immich, or a Chromecast stays available. The application retries discovery and every operational Immich failure indefinitely with bounded cooldowns, while systemd restarts it after an unhandled process failure. Authorization and incompatible API responses are shown as attention conditions but continue retrying. On restart, the persistent installation ID lets the service recognize receiver metadata that still proves ownership, renew the same asset with a fresh relay URL, and continue yielding to external or ambiguous playback.
+
+Confirmed relay URLs remain valid in memory during a running-process outage, but relay tokens and normalized photo bytes are deliberately not persisted. If the Pi restarts while Immich is also unavailable, the Chromecast may retain its decoded image but cannot reliably refetch the old URL. The service keeps retrying and renews that asset automatically once Immich returns. The selected source and recent-image exclusion survive restart; the prepared queue is rebuilt rather than persisted.
 
 To use the dashboard from another trusted-LAN device, bind its separate management listener explicitly:
 
@@ -60,7 +64,7 @@ uv run cast-immich --config config.toml --web-host 0.0.0.0 --web-port 8080
 
 There is no dashboard login. Do not expose the management port to the public internet, an untrusted VLAN, or a public reverse proxy. Browser mutations use same-origin and CSRF defenses, but any client with direct trusted-LAN access can operate the service.
 
-The first valid configuration atomically creates `installation-id` beside the configuration. Persist this non-secret file across restarts so the service can recognize its own existing Cast session. `state.json` stores the pause and autocast settings and at most 10 confirmed display records; keep it beside the configuration and writable by the service.
+The first valid configuration atomically creates `installation-id` beside the configuration. Persist this non-secret file across restarts so the service can recognize its own existing Cast session. `state.json` stores pause/autocast settings, selected sources, recent-image exclusion, and at most 10 confirmed display records; keep it beside the configuration and writable by the service.
 
 ## Configuration
 
@@ -85,7 +89,7 @@ The selected source can be the normal timeline, an album, a detected person, or 
 
 ## Network
 
-Chromecast discovery uses multicast DNS on UDP 5353. The host also needs outbound Cast connectivity to the device, and the Chromecast needs inbound TCP access to the configured relay port. Put both devices on the same subnet where possible and disable Wi-Fi client isolation. Permit the relay port and, only for trusted clients, the management port through the host firewall.
+Chromecast discovery uses multicast DNS on UDP 5353. The host also needs outbound Cast connectivity to the device (normally TCP 8009), outbound HTTP(S) to Immich, and the Chromecast needs inbound TCP access to the configured relay port (8787 in the example). Put both devices on the same subnet where possible and disable Wi-Fi client isolation. Permit the relay port from the Chromecast network and, only for trusted clients, the management port (8080 by default) through the host firewall. No inbound management rule is needed while it remains bound to `127.0.0.1`.
 
 The receiver fetches each photo itself. `127.0.0.1`, an isolated container address, or a hostname unavailable to the Chromecast will not work. Host deployment is recommended. If containerizing later, use host networking so mDNS discovery and the advertised relay address remain valid.
 
@@ -99,7 +103,7 @@ Pause cancels timers and unsent image preparation but leaves current receiver me
 
 ## Operations
 
-Logs are structured JSON. API keys, Cast relay URLs, and thumbnail credentials are not logged or returned by management JSON. `SIGINT` and `SIGTERM` stop scheduling, close discovery and HTTP resources, and leave displayed media untouched. Temporary discovery and Immich failures use bounded retry/cooldown behavior. Failed configuration activation restores the previous persisted and active revision.
+Logs are structured JSON. API keys, Cast relay URLs, and thumbnail credentials are not logged or returned by management JSON. `SIGINT` and `SIGTERM` stop scheduling, close discovery and HTTP resources, and leave displayed media untouched. Discovery and Immich failures use indefinite bounded retry/cooldown behavior. Unexpected coordinator termination exits the process so its service manager can restart the complete graph. Failed configuration activation restores the previous persisted and active revision.
 
 Troubleshooting:
 

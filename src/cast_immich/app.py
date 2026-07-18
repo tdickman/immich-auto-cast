@@ -97,13 +97,24 @@ async def run_from_path(
 
     supervisor = RuntimeSupervisor(path)
     management = ManagementServer(supervisor, web_host, web_port)
+    stop_task: asyncio.Task[bool] | None = None
+    failure_task: asyncio.Task[None] | None = None
     try:
         await management.start()
         snapshot = await supervisor.start()
         if snapshot.mode.value == "active":
             configure_logging(supervisor.config_snapshot.form_values["service"]["log_level"])
-        await stop_event.wait()
+        stop_task = asyncio.create_task(stop_event.wait(), name="shutdown-signal")
+        failure_task = asyncio.create_task(supervisor.wait_for_failure(), name="runtime-failure")
+        done, _ = await asyncio.wait({stop_task, failure_task}, return_when=asyncio.FIRST_COMPLETED)
+        if failure_task in done:
+            await failure_task
     finally:
+        for task in (stop_task, failure_task):
+            if task is not None and not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
         await management.close()
         await supervisor.close()
         for signum in installed_signals:

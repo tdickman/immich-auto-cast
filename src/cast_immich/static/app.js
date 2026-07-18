@@ -6,6 +6,8 @@ const state = {
   selectedOutputId: localStorage.getItem("cast-immich-output"), pendingCommands: new Map(), commandInFlight: new Set(),
   sourceDrafts: new Map(), thumbnailCache: new Map(), pendingSeeks: new Map(), autocastDeadlines: new Map(),
   thumbnailKeys: new Map(), devices: [],
+  disconnectedSince: null, lastContact: null, catalogRetryAt: 0,
+  albumsLoaded: false, peopleLoaded: false,
 };
 const form = document.querySelector("#settings-form");
 const toast = document.querySelector("#toast");
@@ -70,7 +72,7 @@ function titleCase(value) {
 }
 
 function actionAvailable(output, command) {
-  return output?.available_actions?.[command] === true;
+  return state.disconnectedSince === null && output?.available_actions?.[command] === true;
 }
 
 function rotationEnabled(output) {
@@ -142,12 +144,18 @@ function renderSelectedWorkspace() {
   const output = state.outputs.get(outputId);
   if (!output) return;
   const coordinator = output.coordinator || {};
-  const active = state.mode === "active";
+  const active = state.mode === "active" && state.disconnectedSince === null;
   const owned = coordinator.state === "owned";
   const rotationIsEnabled = rotationEnabled(output);
   const draft = sourceDraft(outputId);
+  const retry = coordinator.retry_remaining_seconds;
+  const healthMessage = coordinator.health_message
+    ? `${coordinator.health_message}${typeof retry === "number" ? ` in ${Math.ceil(retry)}s` : ""}`
+    : "";
   document.querySelector("#workspace-output-name").textContent = output.name || output.id;
-  document.querySelector("#ownership-note").textContent = state.error || coordinator.error || (
+  document.querySelector("#ownership-note").textContent = state.disconnectedSince !== null
+    ? "Dashboard connection lost. Displayed information is stale; reconnecting automatically."
+    : state.error || coordinator.error || healthMessage || (
     owned ? `Ready to control ${output.name || output.id}.` : "Waiting until this receiver is available."
   );
   const rotation = document.querySelector("#rotation-toggle");
@@ -181,6 +189,8 @@ function renderSelectedWorkspace() {
 }
 
 function renderStatus(payload) {
+  state.disconnectedSince = null;
+  state.lastContact = Date.now();
   state.csrf = payload.csrf_token || state.csrf;
   state.mode = payload.mode || "setup";
   state.error = payload.error || "";
@@ -195,10 +205,25 @@ function renderStatus(payload) {
   }
   if (!state.outputs.has(state.selectedOutputId)) state.selectedOutputId = state.outputs.keys().next().value || null;
   if (state.selectedOutputId) localStorage.setItem("cast-immich-output", state.selectedOutputId);
-  document.querySelector("#service-mode").textContent = titleCase(state.mode);
-  document.querySelector("#signal-dot").className = `signal-dot ${state.mode === "active" ? "active" : state.error ? "error" : ""}`;
+  renderServiceSignal();
   renderOverview();
   renderSelectedWorkspace();
+}
+
+function renderServiceSignal() {
+  const label = document.querySelector("#service-mode");
+  const dot = document.querySelector("#signal-dot");
+  if (state.disconnectedSince !== null) {
+    const seconds = Math.max(1, Math.floor((Date.now() - state.disconnectedSince) / 1000));
+    label.textContent = `Offline · stale for ${seconds}s`;
+    dot.className = "signal-dot error";
+    return;
+  }
+  const health = [...state.outputs.values()].map(output => output.coordinator?.health || "healthy");
+  const level = health.includes("fatal") || health.includes("attention")
+    ? "attention" : health.includes("degraded") ? "degraded" : "healthy";
+  label.textContent = level === "healthy" ? titleCase(state.mode) : titleCase(level);
+  dot.className = `signal-dot ${level === "healthy" ? "active" : level}`;
 }
 
 function thumbnailKey(outputId, record) {
@@ -496,13 +521,19 @@ async function refresh() {
   try {
     const status = await request("/api/status");
     renderStatus(status);
+    void refreshCatalogs();
     const outputId = state.selectedOutputId;
     if (outputId) await loadHistory(outputId);
   } catch (error) {
     if (error.status === 409) {
       await loadConfig();
       notify("Settings changed elsewhere. Your draft is preserved; review and apply again.", true);
-    } else notify(error.message, true);
+    } else if (error.status) notify(error.message, true);
+    else {
+      if (state.disconnectedSince === null) state.disconnectedSince = Date.now();
+      renderServiceSignal();
+      renderSelectedWorkspace();
+    }
   }
 }
 
@@ -704,6 +735,7 @@ async function loadAlbums() {
   const select = document.querySelector("#album-select");
   select.replaceChildren(new Option("Choose an album", ""));
   albums.forEach(album => select.add(new Option(`${album.name} (${album.asset_count})`, album.id)));
+  state.albumsLoaded = true;
 }
 
 async function loadPeople() {
@@ -711,6 +743,17 @@ async function loadPeople() {
   const select = document.querySelector("#person-select");
   select.replaceChildren(new Option("Choose a person", ""));
   people.forEach(person => select.add(new Option(person.name, person.id)));
+  state.peopleLoaded = true;
+}
+
+async function refreshCatalogs(force = false) {
+  if (!force && state.albumsLoaded && state.peopleLoaded) return;
+  if (!force && Date.now() < state.catalogRetryAt) return;
+  state.catalogRetryAt = Date.now() + 30000;
+  await Promise.allSettled([
+    state.albumsLoaded ? Promise.resolve() : loadAlbums(),
+    state.peopleLoaded ? Promise.resolve() : loadPeople(),
+  ]);
 }
 
 outputList.addEventListener("click", event => {
@@ -840,11 +883,14 @@ document.querySelector("#discover-button").addEventListener("click", async event
 });
 
 async function boot() {
-  try { await loadConfig(); await Promise.all([loadAlbums(), loadPeople(), refresh()]); }
+  try { await loadConfig(); await Promise.all([refreshCatalogs(true), refresh()]); }
   catch (error) { notify(error.message, true); }
   document.querySelector("#discover-button").click();
   state.timer = window.setInterval(refresh, 3500);
-  state.countdownTimer = window.setInterval(renderAutocastControl, 250);
+  state.countdownTimer = window.setInterval(() => {
+    renderAutocastControl();
+    if (state.disconnectedSince !== null) renderServiceSignal();
+  }, 250);
 }
 
 boot();

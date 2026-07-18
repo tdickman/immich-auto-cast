@@ -19,7 +19,14 @@ from .cast import (
 )
 from .config import RotationSettings
 from .history import DisplayRecord, HistoryState
-from .immich import Asset, PermanentImmichError, PhotoSource, SourceKind
+from .immich import (
+    Asset,
+    AssetUnavailable,
+    ImmichError,
+    ImmichFailureKind,
+    PhotoSource,
+    SourceKind,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +39,13 @@ class State(StrEnum):
     OWNED = "owned"
     PROTECTED = "protected"
     COOLDOWN = "cooldown"
+
+
+class HealthLevel(StrEnum):
+    HEALTHY = "healthy"
+    DEGRADED = "degraded"
+    ATTENTION = "attention"
+    FATAL = "fatal"
 
 
 class AssetSelector(Protocol):
@@ -61,6 +75,10 @@ class Relay(Protocol):
 
     async def mint(self, asset_id: UUID) -> tuple[str, str]: ...
 
+    def confirm(self, url: str) -> None: ...
+
+    def retire(self, url: str) -> None: ...
+
 
 class CastCommands(Protocol):
     async def load_image(
@@ -84,6 +102,10 @@ class HistoryPersistence(Protocol):
     def set_rotation_enabled(self, enabled: bool) -> HistoryState: ...
 
     def set_autocast_enabled(self, enabled: bool) -> HistoryState: ...
+
+    def set_source(
+        self, kind: str, source_id: str | None = None, query: str | None = None
+    ) -> HistoryState: ...
 
     def record_display(self, load_id: str, asset_id: str) -> DisplayRecord: ...
 
@@ -123,6 +145,10 @@ class CoordinatorSnapshot:
     selected_person: UUID | None = None
     search_query: str | None = None
     autocast_deadline: float | None = None
+    health: HealthLevel = HealthLevel.DEGRADED
+    health_reason: str = "starting"
+    health_message: str = "Connecting to Chromecast"
+    retry_deadline: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,6 +226,9 @@ class Coordinator:
         self._upcoming: deque[Asset] = deque(maxlen=10)
         self._source = PhotoSource()
         self._startup_pending = True
+        self._reclaim_pending = False
+        self._reclaim_asset: UUID | None = None
+        self._confirmed_url: str | None = None
         self._nonce = 0
         self._timer: asyncio.Task[None] | None = None
         self._timer_purpose: str | None = None
@@ -210,6 +239,8 @@ class Coordinator:
         self._refresh: tuple[str, float] | None = None
         self._expected: tuple[str, str, UUID] | None = None
         self._failure_count = 0
+        self._immich_failure: ImmichError | None = None
+        self._retry_deadline: float | None = None
         self._stopping = False
         self._active_command: tuple[CommandEvent, tuple[str, str, UUID] | None] | None = None
         self._command_results: OrderedDict[
@@ -290,7 +321,7 @@ class Coordinator:
         elif isinstance(event, CommandEvent):
             await self._handle_command(event)
         elif isinstance(event, SourceEvent):
-            self._handle_source(event)
+            await self._handle_source(event)
         elif event.generation != self._generation or event.nonce != self._nonce:
             pass
         elif isinstance(event, _TimerEvent):
@@ -317,6 +348,10 @@ class Coordinator:
             state = await asyncio.to_thread(self._history.load)
             self._rotation_enabled = state.rotation_enabled
             self._autocast_enabled = state.autocast_enabled
+            source_id = UUID(state.source_id) if state.source_id is not None else None
+            self._source = PhotoSource(SourceKind(state.source_kind), source_id, state.source_query)
+            recent = state.recent_asset_ids or tuple(record.asset_id for record in state.records)
+            self._recent.extend(UUID(asset_id) for asset_id in reversed(recent))
         except Exception:
             self._error = "history persistence failed"
 
@@ -379,7 +414,7 @@ class Coordinator:
         self._active_command = (event, ownership)
         await self._request_refresh(event.command.value)
 
-    def _handle_source(self, event: SourceEvent) -> None:
+    async def _handle_source(self, event: SourceEvent) -> None:
         if event.completion.cancelled():
             return
         if self._active_command is not None or self.state is State.LOAD_PENDING:
@@ -388,6 +423,18 @@ class Coordinator:
         if self._source == event.source:
             event.completion.set_result(True)
             return
+        if self._history is not None:
+            try:
+                await asyncio.to_thread(
+                    self._history.set_source,
+                    event.source.kind.value,
+                    str(event.source.id) if event.source.id is not None else None,
+                    event.source.query,
+                )
+            except Exception:
+                self._error = "history persistence failed"
+                event.completion.set_result(False)
+                return
         owned = self._ownership_current()
         self._invalidate_work(preserve_expected=owned is not None)
         self._upcoming.clear()
@@ -479,7 +526,10 @@ class Coordinator:
             self._expected = owned
             self.state = State.OWNED
             if enabled:
-                if self._rotation_enabled:
+                if self._reclaim_pending:
+                    self._reclaim_asset = owned[2]
+                    self._begin_preparation("reclaim")
+                elif self._rotation_enabled:
                     self._schedule("rotate", self._settings.interval)
                 self._store_result(event, CommandResult.APPLIED)
             else:
@@ -522,6 +572,8 @@ class Coordinator:
             self._invalidate_work()
             self._receiver = self._media = None
             self._generation = event.generation
+            self._reclaim_pending = True
+            self._reclaim_asset = None
             self.state = State.SYNCHRONIZING
             return
         if event.generation != self._generation:
@@ -544,7 +596,10 @@ class Coordinator:
                 BACKDROP_RECEIVER,
                 DEFAULT_MEDIA_RECEIVER,
             }:
+                self._retire_confirmed()
                 self._invalidate_work()
+                self._reclaim_pending = False
+                self._reclaim_asset = None
                 self.state = State.PROTECTED
                 return
         elif event.kind is EventKind.MEDIA and event.media is not None:
@@ -580,6 +635,15 @@ class Coordinator:
                 self._cancel_timer()
                 self._recent.append(owned[2])
                 self._failure_count = 0
+                previous_url = self._confirmed_url
+                confirm = getattr(self._relay, "confirm", None)
+                if confirm is not None:
+                    confirm(owned[1])
+                self._confirmed_url = owned[1]
+                if previous_url is not None and previous_url != owned[1]:
+                    self._retire_url(previous_url)
+                self._reclaim_pending = False
+                self._reclaim_asset = None
                 self._expected = owned
                 self.state = State.OWNED
                 await self._record_confirmation(owned)
@@ -598,10 +662,18 @@ class Coordinator:
         if owned is not None:
             self._expected = owned
             self.state = State.OWNED
+            if self._reclaim_pending and self._rotation_enabled and self._autocast_enabled:
+                self._reclaim_asset = owned[2]
+                self._begin_preparation("reclaim")
+                return
+            if not self._reclaim_pending:
+                self._reclaim_asset = None
             if self._rotation_enabled and self._timer is None:
                 self._schedule("rotate", self._settings.interval)
             return
         if self._is_idle():
+            self._reclaim_pending = False
+            self._reclaim_asset = None
             if not self._rotation_enabled or not self._autocast_enabled:
                 self._invalidate_work()
                 self.state = State.IDLE_CANDIDATE
@@ -613,6 +685,9 @@ class Coordinator:
                 self._schedule("idle", delay)
             return
         self._invalidate_work()
+        self._retire_confirmed()
+        self._reclaim_pending = False
+        self._reclaim_asset = None
         self.state = State.PROTECTED
 
     async def _handle_timer(self, event: _TimerEvent) -> None:
@@ -644,7 +719,17 @@ class Coordinator:
         if self._abandon_cancelled_command():
             return
         if purpose == "cooldown":
-            await self._classify()
+            owned = self._ownership_current()
+            if self._rotation_enabled and self._autocast_enabled and owned is not None:
+                self.state = State.OWNED
+                if self._reclaim_pending:
+                    self._reclaim_asset = owned[2]
+                self._begin_preparation("reclaim" if self._reclaim_pending else "owned")
+            elif self._rotation_enabled and self._autocast_enabled and self._is_idle():
+                self.state = State.IDLE_CANDIDATE
+                self._begin_preparation("idle")
+            else:
+                await self._classify()
         elif purpose == "enable":
             await self._classify()
         elif purpose == "autocast_enable" and self._is_idle():
@@ -675,6 +760,7 @@ class Coordinator:
                     stopped = False
                 self._complete_active(CommandResult.APPLIED if stopped else CommandResult.FAILED)
                 if stopped:
+                    self._retire_confirmed()
                     self._invalidate_work()
                     self._receiver = self._media = None
                     self.state = State.SYNCHRONIZING
@@ -687,6 +773,7 @@ class Coordinator:
                 stopped = False
             self._complete_active(CommandResult.APPLIED if stopped else CommandResult.FAILED)
             if stopped:
+                self._retire_confirmed()
                 self._invalidate_work()
                 self._receiver = self._media = None
                 self.state = State.SYNCHRONIZING
@@ -699,10 +786,12 @@ class Coordinator:
             if valid:
                 await self._send_prepared_load()
             else:
+                self._retire_confirmed()
                 self._invalidate_work()
                 self.state = State.PROTECTED
         else:
             self._complete_active(CommandResult.REFUSED_NOT_OWNED)
+            self._retire_confirmed()
             self._invalidate_work()
             self.state = State.PROTECTED
 
@@ -717,6 +806,26 @@ class Coordinator:
 
     async def _prepare(self, generation: int, nonce: int, mode: str) -> None:
         try:
+            if mode == "reclaim" and self._reclaim_asset is not None:
+                try:
+                    reclaimed = Asset(self._reclaim_asset)
+                    url, content_type = await self._relay.mint(reclaimed.id)
+                except AssetUnavailable:
+                    pass
+                else:
+                    await self.queue.put(
+                        _PreparedEvent(
+                            generation,
+                            nonce,
+                            mode,
+                            reclaimed,
+                            url,
+                            content_type,
+                            None,
+                            tuple(self._upcoming),
+                        )
+                    )
+                    return
             candidates = list(self._upcoming)
             needed = 11 - len(candidates)
             try:
@@ -772,12 +881,8 @@ class Coordinator:
         if self._abandon_cancelled_command():
             return
         if event.error is not None:
-            if isinstance(event.error, PermanentImmichError):
-                self._error = "Immich credentials or API permissions require attention"
-                self._complete_active(CommandResult.FAILED)
-                self._invalidate_work()
-                self.state = State.PROTECTED
-                return
+            if isinstance(event.error, ImmichError):
+                self._immich_failure = event.error
             self._enter_cooldown()
             return
         if event.asset is None or event.url is None or event.content_type is None:
@@ -788,6 +893,10 @@ class Coordinator:
             self._complete_active(CommandResult.REFUSED_NOT_OWNED)
             return
         self._upcoming = deque(event.upcoming, maxlen=10)
+        self._failure_count = 0
+        self._immich_failure = None
+        self._retry_deadline = None
+        self._error = None
         if self._upcoming:
             if self._preload is not None:
                 self._preload.cancel()
@@ -923,11 +1032,22 @@ class Coordinator:
         receiver = self._receiver[0]
         return receiver.app_id is not None and receiver.session_id is not None
 
+    def _retire_confirmed(self) -> None:
+        if self._confirmed_url is not None:
+            self._retire_url(self._confirmed_url)
+            self._confirmed_url = None
+
+    def _retire_url(self, url: str) -> None:
+        retire = getattr(self._relay, "retire", None)
+        if retire is not None:
+            retire(url)
+
     def _enter_cooldown(self) -> None:
         self._failure_count += 1
         delay = min(self._settings.cooldown * (2 ** (self._failure_count - 1)), 300.0)
         self._invalidate_work()
         self.state = State.COOLDOWN
+        self._retry_deadline = time.monotonic() + delay
         self._schedule("cooldown", delay)
 
     def _schedule(self, purpose: str, delay: float) -> None:
@@ -968,6 +1088,7 @@ class Coordinator:
 
     def _publish_snapshot(self) -> None:
         current = self._ownership_current()
+        health, reason, message = self._health()
         self._snapshot = CoordinatorSnapshot(
             state=self.state,
             rotation_enabled=self._rotation_enabled,
@@ -983,4 +1104,55 @@ class Coordinator:
             selected_person=self._source.id if self._source.kind is SourceKind.PERSON else None,
             search_query=self._source.query if self._source.kind is SourceKind.SEARCH else None,
             autocast_deadline=self._autocast_deadline,
+            health=health,
+            health_reason=reason,
+            health_message=message,
+            retry_deadline=self._retry_deadline,
         )
+
+    def _health(self) -> tuple[HealthLevel, str, str]:
+        if self._error is not None:
+            return HealthLevel.ATTENTION, "state_persistence", self._error
+        if self._immich_failure is not None:
+            kind = self._immich_failure.kind
+            if kind is ImmichFailureKind.AUTHORIZATION:
+                return (
+                    HealthLevel.ATTENTION,
+                    kind.value,
+                    "Immich credentials or permissions need attention; retrying automatically",
+                )
+            if kind in {
+                ImmichFailureKind.REQUEST_REJECTED,
+                ImmichFailureKind.INCOMPATIBLE_RESPONSE,
+            }:
+                return (
+                    HealthLevel.ATTENTION,
+                    kind.value,
+                    "Immich API response needs attention; retrying automatically",
+                )
+            if kind is ImmichFailureKind.ASSET_UNAVAILABLE:
+                return (
+                    HealthLevel.DEGRADED,
+                    kind.value,
+                    "No eligible Immich photo is available; retrying automatically",
+                )
+            return (
+                HealthLevel.DEGRADED,
+                kind.value,
+                "Immich is unavailable; retrying automatically",
+            )
+        if self.state is State.UNAVAILABLE:
+            return HealthLevel.DEGRADED, "cast_disconnected", "Chromecast disconnected; retrying"
+        if self.state is State.SYNCHRONIZING:
+            return HealthLevel.DEGRADED, "cast_synchronizing", "Synchronizing with Chromecast"
+        if not self._rotation_enabled:
+            return HealthLevel.HEALTHY, "rotation_paused", "Rotation is paused"
+        if not self._autocast_enabled:
+            return HealthLevel.HEALTHY, "autocast_disabled", "Autocast is disabled"
+        if self.state is State.PROTECTED:
+            return HealthLevel.HEALTHY, "external_playback", "External playback is protected"
+        if self.state is State.IDLE_CANDIDATE:
+            return HealthLevel.HEALTHY, "waiting_for_idle", "Waiting to start autocast"
+        if self.state is State.COOLDOWN:
+            return HealthLevel.DEGRADED, "cast_retry", "Receiver operation failed; retrying"
+        return HealthLevel.HEALTHY, "healthy", "Service is operating normally"

@@ -104,6 +104,8 @@ class ComponentGraph(Protocol):
 
     async def start(self) -> None: ...
 
+    async def wait_for_coordinator_exit(self) -> None: ...
+
     async def command(self, output_id: str, command: Command, request_id: str) -> CommandResult: ...
 
     async def seek(
@@ -422,6 +424,8 @@ class RuntimeSupervisor:
         self._draining_tasks: set[asyncio.Task[None]] = set()
         self._thumbnail_semaphore = asyncio.Semaphore(4)
         self._close_task: asyncio.Task[None] | None = None
+        self._graph_monitor: asyncio.Task[None] | None = None
+        self._failures: asyncio.Queue[BaseException] = asyncio.Queue(maxsize=1)
 
     @property
     def history_store(self) -> HistoryStore:
@@ -475,11 +479,13 @@ class RuntimeSupervisor:
                 if graph is not None:
                     await self._close_graph(graph)
                 self._error = "runtime activation failed"
+                self._signal_failure(RuntimeError(self._error))
                 return self.snapshot
             self._graph = graph
             self._generation = 1
             self._mode = RuntimeMode.ACTIVE
             self._error = None
+            self._start_graph_monitor(graph)
             return self.snapshot
 
     async def apply_settings(
@@ -520,6 +526,7 @@ class RuntimeSupervisor:
                 if same_endpoint and previous_graph is not None:
                     previous_graph.transfer_capabilities_to(candidate_graph)
                     previous_closed = True
+                    await self._cancel_graph_monitor()
                     await previous_graph.close()
                     self._graph = None
                 await candidate_graph.stage()
@@ -536,6 +543,7 @@ class RuntimeSupervisor:
                     raise
                 if previous_graph is not None and not previous_closed:
                     previous_closed = True
+                    await self._cancel_graph_monitor()
                     await previous_graph.quiesce()
                     self._graph = None
                 await candidate_graph.start()
@@ -579,6 +587,7 @@ class RuntimeSupervisor:
             self._generation += 1
             self._mode = RuntimeMode.ACTIVE
             self._error = None
+            self._start_graph_monitor(candidate_graph)
             logging.getLogger().setLevel(candidate.document.settings.service.log_level)
             if previous_graph is not None and not same_endpoint:
                 self._start_relay_drain(
@@ -725,6 +734,7 @@ class RuntimeSupervisor:
             if self._closed:
                 return
             graph, self._graph = self._graph, None
+            await self._cancel_graph_monitor()
             if graph is not None:
                 await graph.close()
             draining = list(self._draining_tasks)
@@ -740,6 +750,10 @@ class RuntimeSupervisor:
             self._reconnect_tasks.clear()
             self._closed = True
             self._mode = RuntimeMode.CLOSED
+
+    async def wait_for_failure(self) -> None:
+        failure = await self._failures.get()
+        raise failure
 
     async def _rollback(
         self,
@@ -788,6 +802,8 @@ class RuntimeSupervisor:
         self._error = (
             "configuration rollback failed" if restore_failed else "candidate activation failed"
         )
+        if self._graph is not None:
+            self._start_graph_monitor(self._graph)
 
     @staticmethod
     async def _close_graph(graph: ComponentGraph) -> None:
@@ -814,3 +830,34 @@ class RuntimeSupervisor:
         task = asyncio.create_task(close_later(), name="relay-capability-drain")
         self._draining_tasks.add(task)
         task.add_done_callback(self._draining_tasks.discard)
+
+    def _start_graph_monitor(self, graph: ComponentGraph) -> None:
+        if self._graph_monitor is not None and not self._graph_monitor.done():
+            return
+
+        async def monitor() -> None:
+            try:
+                await graph.wait_for_coordinator_exit()
+            except asyncio.CancelledError:
+                raise
+            except BaseException as error:
+                failure = error
+            else:
+                failure = RuntimeError("coordinator stopped unexpectedly")
+            if graph is self._graph and not self._closed:
+                self._mode = RuntimeMode.DEGRADED
+                self._error = "coordinator stopped unexpectedly"
+                self._signal_failure(failure)
+
+        self._graph_monitor = asyncio.create_task(monitor(), name="runtime-graph-monitor")
+
+    async def _cancel_graph_monitor(self) -> None:
+        task, self._graph_monitor = self._graph_monitor, None
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    def _signal_failure(self, failure: BaseException) -> None:
+        if self._failures.empty():
+            self._failures.put_nowait(failure)
