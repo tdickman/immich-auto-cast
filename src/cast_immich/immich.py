@@ -630,7 +630,8 @@ class ImmichClient:
         if isinstance(value, bool):
             return None
         if isinstance(value, int | float):
-            return float(value) if value > 0 else None
+            # Immich's AssetResponseDto represents numeric duration in milliseconds.
+            return float(value) / 1000 if value > 0 else None
         if not isinstance(value, str) or not value.strip():
             return None
         text = value.strip()

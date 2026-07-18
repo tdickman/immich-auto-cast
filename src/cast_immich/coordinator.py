@@ -1281,7 +1281,7 @@ class Coordinator:
                 return (
                     HealthLevel.DEGRADED,
                     kind.value,
-                    "No eligible Immich photo is available; retrying automatically",
+                    "No eligible Immich media is available; retrying automatically",
                 )
             return (
                 HealthLevel.DEGRADED,

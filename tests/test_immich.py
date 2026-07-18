@@ -47,7 +47,7 @@ async def test_video_source_requires_known_bounded_duration(serve_app: Any) -> N
         return web.json_response(
             [
                 eligible(type="VIDEO", duration="00:00:31"),
-                eligible(UUID(int=2), type="VIDEO", duration="00:00:12.5"),
+                eligible(UUID(int=2), type="VIDEO", duration=12_500),
                 eligible(UUID(int=3), type="VIDEO", duration=None),
             ]
         )
