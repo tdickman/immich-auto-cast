@@ -125,11 +125,16 @@ Troubleshooting:
 
 ```console
 uv sync --all-groups
+uv run pre-commit install
 uv run pytest -m 'not hardware'
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy
 ```
+
+The pre-commit hooks automatically apply Ruff lint fixes and formatting to staged Python
+files. If a hook changes a file, review and stage the result before committing again. Run
+`uv run pre-commit run --all-files` to check the entire repository locally.
 
 The opt-in hardware discovery smoke test is read-only:
 

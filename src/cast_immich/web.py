@@ -529,9 +529,7 @@ class ManagementServer:
         if self.host in {"127.0.0.1", "::1", "localhost"}:
             allowed = {"127.0.0.1", "::1", "localhost"}
         runner = web.AppRunner(
-            create_management_app(
-                self.supervisor, password=self.password, allowed_hosts=allowed
-            ),
+            create_management_app(self.supervisor, password=self.password, allowed_hosts=allowed),
             access_log=None,
         )
         await runner.setup()

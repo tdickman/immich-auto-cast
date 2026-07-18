@@ -89,9 +89,7 @@ class ImageRelay:
         self._max_tokens = max_tokens
         self._tokens: OrderedDict[str, Capability] = OrderedDict()
         self._previews: OrderedDict[tuple[UUID, QrPlacement | None], Preview] = OrderedDict()
-        self._preview_tasks: dict[
-            tuple[UUID, QrPlacement | None], asyncio.Task[Preview]
-        ] = {}
+        self._preview_tasks: dict[tuple[UUID, QrPlacement | None], asyncio.Task[Preview]] = {}
         self._dashboard_url = dashboard_url
         self._web_qrs: dict[float, Image.Image] = {}
         self._semaphore = asyncio.Semaphore(settings.max_concurrent)
@@ -284,9 +282,7 @@ class ImageRelay:
             self._previews.popitem(last=False)
         return preview
 
-    async def _fetch_preview(
-        self, asset_id: UUID, placement: QrPlacement | None
-    ) -> Preview:
+    async def _fetch_preview(self, asset_id: UUID, placement: QrPlacement | None) -> Preview:
         async with self._semaphore:
             preview = await self._source.fetch_preview(asset_id, self._settings.max_response_bytes)
             if preview.content_type not in ALLOWED_IMAGE_TYPES:
@@ -531,15 +527,9 @@ def _draw_web_qr(
     background_alpha = round((155 if dark_background else 175) * opacity)
     module_alpha = round((245 if dark_background else 240) * opacity)
     background = (
-        (0, 0, 0, background_alpha)
-        if dark_background
-        else (255, 255, 255, background_alpha)
+        (0, 0, 0, background_alpha) if dark_background else (255, 255, 255, background_alpha)
     )
-    module = (
-        (255, 255, 255, module_alpha)
-        if dark_background
-        else (0, 0, 0, module_alpha)
-    )
+    module = (255, 255, 255, module_alpha) if dark_background else (0, 0, 0, module_alpha)
 
     badge = Image.new("RGBA", (width, height))
     draw = ImageDraw.Draw(badge)

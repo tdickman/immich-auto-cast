@@ -74,9 +74,7 @@ def test_rejects_invalid_web_qr_size(tmp_path: Path, size: int | float) -> None:
 
 def test_accepts_fractional_web_qr_size(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
-    path.write_text(
-        config_text().replace("interval = 30", "interval = 30\nweb_qr_size = 1.5")
-    )
+    path.write_text(config_text().replace("interval = 30", "interval = 30\nweb_qr_size = 1.5"))
 
     assert load_settings(path).outputs[0].rotation.web_qr_size == 1.5
 

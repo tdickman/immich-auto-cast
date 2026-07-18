@@ -356,9 +356,7 @@ def _parse_candidate(
         )
         if discovery_timeout > 30:
             _fail(f"{section}.discovery_timeout must not exceed 30 seconds")
-        web_qr_size = float(
-            _positive(output.get("web_qr_size", 1), f"{section}.web_qr_size")
-        )
+        web_qr_size = float(_positive(output.get("web_qr_size", 1), f"{section}.web_qr_size"))
         if not math.isfinite(web_qr_size) or not 1 <= web_qr_size <= 6:
             _fail(f"{section}.web_qr_size must be between 1 and 6")
         web_qr_position = str(output.get("web_qr_position", "bottom-left"))

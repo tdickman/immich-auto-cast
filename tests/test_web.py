@@ -312,9 +312,9 @@ async def test_dashboard_assets_expose_complete_operator_interface(
     assert 'className = "qr-placement-preview"' not in javascript
     assert 'badge.addEventListener("pointermove"' not in javascript
     assert "Save changes to reload the current TV image" in javascript
-    assert 'if (options.max) control.max = options.max' in javascript
+    assert "if (options.max) control.max = options.max" in javascript
     assert ".qr-placement-preview" not in css
-    assert 'control.checked = value ?? false' in javascript
+    assert "control.checked = value ?? false" in javascript
     assert 'id="reconnect-button"' not in html
     assert "Stop cast" in html
     assert "Disable autocast" in html

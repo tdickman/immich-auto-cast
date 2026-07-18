@@ -101,9 +101,7 @@ def test_dashboard_access_is_embedded_in_runtime_qr_url(
     ).document.settings
     captured: dict[str, str] = {}
 
-    def capture_graph(
-        _settings: Settings, _history: HistoryStore, *, dashboard_url: str
-    ) -> object:
+    def capture_graph(_settings: Settings, _history: HistoryStore, *, dashboard_url: str) -> object:
         captured["url"] = dashboard_url
         return object()
 

@@ -96,9 +96,7 @@ async def test_run_from_path_propagates_runtime_failure_after_cleanup(
             events.append("supervisor-close")
 
     class FakeManagement:
-        def __init__(
-            self, _supervisor: object, password: str, _host: str, _port: int
-        ) -> None:
+        def __init__(self, _supervisor: object, password: str, _host: str, _port: int) -> None:
             assert password
             pass
 
