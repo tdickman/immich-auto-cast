@@ -177,6 +177,29 @@ def test_source_selection_persists_as_validated_primitives(tmp_path: Path) -> No
     assert persisted["source_query"] == "summer holiday"
 
 
+def test_event_and_filter_sources_round_trip(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    history = HistoryStore(path).for_output("office")
+    person_id = "12345678-1234-4234-8234-123456789abc"
+
+    recap = history.set_source("event", person_id, collection="family_recap")
+    assert recap.source_collection == "family_recap"
+    assert recap.source_id == person_id
+
+    filtered = history.set_source(
+        "filter",
+        start_date="2020-01-02",
+        end_date="2020-02-03",
+        city="  Bath  ",
+        state="Somerset",
+        country="United Kingdom",
+    )
+    assert filtered.source_start_date == "2020-01-02"
+    assert filtered.source_end_date == "2020-02-03"
+    assert filtered.source_city == "Bath"
+    assert HistoryStore(path).for_output("office").load() == filtered
+
+
 @pytest.mark.parametrize(
     ("kind", "source_id", "query"),
     [

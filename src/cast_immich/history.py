@@ -5,7 +5,7 @@ import os
 import tempfile
 import threading
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -32,6 +32,12 @@ class HistoryState:
     source_kind: str = "timeline"
     source_id: str | None = None
     source_query: str | None = None
+    source_collection: str | None = None
+    source_start_date: str | None = None
+    source_end_date: str | None = None
+    source_city: str | None = None
+    source_state: str | None = None
+    source_country: str | None = None
     recent_asset_ids: tuple[str, ...] = ()
 
 
@@ -50,9 +56,29 @@ class OutputHistory:
         return self._store._set_enabled(self.output_id, "autocast_enabled", enabled)
 
     def set_source(
-        self, kind: str, source_id: str | None = None, query: str | None = None
+        self,
+        kind: str,
+        source_id: str | None = None,
+        query: str | None = None,
+        collection: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        city: str | None = None,
+        state: str | None = None,
+        country: str | None = None,
     ) -> HistoryState:
-        return self._store._set_source(self.output_id, kind, source_id, query)
+        return self._store._set_source(
+            self.output_id,
+            kind,
+            source_id,
+            query,
+            collection,
+            start_date,
+            end_date,
+            city,
+            state,
+            country,
+        )
 
     def record_display(
         self,
@@ -75,7 +101,10 @@ class HistoryStore:
     MAX_RECORDS = 10
     MAX_RECENT_ASSETS = 1000
     VERSION = 3
-    SOURCE_KINDS = frozenset({"timeline", "album", "person", "search"})
+    SOURCE_KINDS = frozenset({"timeline", "album", "person", "search", "event", "filter"})
+    EVENT_COLLECTIONS = frozenset(
+        {"on_this_day", "recent_favorites", "last_month", "seasonal", "family_recap"}
+    )
 
     def __init__(self, path: Path) -> None:
         self._path = path
@@ -97,9 +126,20 @@ class HistoryStore:
         return self.for_output("default").set_autocast_enabled(enabled)
 
     def set_source(
-        self, kind: str, source_id: str | None = None, query: str | None = None
+        self,
+        kind: str,
+        source_id: str | None = None,
+        query: str | None = None,
+        collection: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        city: str | None = None,
+        state: str | None = None,
+        country: str | None = None,
     ) -> HistoryState:
-        return self.for_output("default").set_source(kind, source_id, query)
+        return self.for_output("default").set_source(
+            kind, source_id, query, collection, start_date, end_date, city, state, country
+        )
 
     def record_display(
         self,
@@ -134,6 +174,12 @@ class HistoryStore:
                 source_kind=current.source_kind,
                 source_id=current.source_id,
                 source_query=current.source_query,
+                source_collection=current.source_collection,
+                source_start_date=current.source_start_date,
+                source_end_date=current.source_end_date,
+                source_city=current.source_city,
+                source_state=current.source_state,
+                source_country=current.source_country,
                 recent_asset_ids=current.recent_asset_ids,
             )
             states[output_id] = state
@@ -141,24 +187,42 @@ class HistoryStore:
             return state
 
     def _set_source(
-        self, output_id: str, kind: str, source_id: str | None, query: str | None
+        self,
+        output_id: str,
+        kind: str,
+        source_id: str | None,
+        query: str | None,
+        collection: str | None,
+        start_date: str | None,
+        end_date: str | None,
+        city: str | None,
+        region: str | None,
+        country: str | None,
     ) -> HistoryState:
-        source_kind, normalized_id, normalized_query = self._validate_source(kind, source_id, query)
+        source = self._validate_source(
+            kind, source_id, query, collection, start_date, end_date, city, region, country
+        )
         with self._lock:
             states = self._load_all_unlocked()
             current = states.get(output_id, HistoryState())
-            state = HistoryState(
+            updated = HistoryState(
                 rotation_enabled=current.rotation_enabled,
                 records=current.records,
                 autocast_enabled=current.autocast_enabled,
-                source_kind=source_kind,
-                source_id=normalized_id,
-                source_query=normalized_query,
+                source_kind=source[0],
+                source_id=source[1],
+                source_query=source[2],
+                source_collection=source[3],
+                source_start_date=source[4],
+                source_end_date=source[5],
+                source_city=source[6],
+                source_state=source[7],
+                source_country=source[8],
                 recent_asset_ids=current.recent_asset_ids,
             )
-            states[output_id] = state
+            states[output_id] = updated
             self._write_unlocked(states)
-            return state
+            return updated
 
     def _record_display(
         self,
@@ -196,6 +260,12 @@ class HistoryStore:
                 source_kind=current.source_kind,
                 source_id=current.source_id,
                 source_query=current.source_query,
+                source_collection=current.source_collection,
+                source_start_date=current.source_start_date,
+                source_end_date=current.source_end_date,
+                source_city=current.source_city,
+                source_state=current.source_state,
+                source_country=current.source_country,
                 recent_asset_ids=recent_asset_ids[: self.MAX_RECENT_ASSETS],
             )
             self._write_unlocked(states)
@@ -242,10 +312,16 @@ class HistoryStore:
             raise ValueError("invalid display records")
         if tuple(sorted(records, key=lambda item: item.confirmed_at, reverse=True)) != records:
             raise ValueError("display records are not newest first")
-        source_kind, source_id, source_query = self._validate_source(
+        source = self._validate_source(
             raw.get("source_kind", "timeline"),
             raw.get("source_id"),
             raw.get("source_query"),
+            raw.get("source_collection"),
+            raw.get("source_start_date"),
+            raw.get("source_end_date"),
+            raw.get("source_city"),
+            raw.get("source_state"),
+            raw.get("source_country"),
             error_type=ValueError,
         )
         recent_data = raw.get("recent_asset_ids", [])
@@ -260,9 +336,15 @@ class HistoryStore:
             rotation_enabled=enabled,
             records=records,
             autocast_enabled=autocast_enabled,
-            source_kind=source_kind,
-            source_id=source_id,
-            source_query=source_query,
+            source_kind=source[0],
+            source_id=source[1],
+            source_query=source[2],
+            source_collection=source[3],
+            source_start_date=source[4],
+            source_end_date=source[5],
+            source_city=source[6],
+            source_state=source[7],
+            source_country=source[8],
             recent_asset_ids=tuple(recent_data),
         )
 
@@ -272,29 +354,115 @@ class HistoryStore:
         kind: Any,
         source_id: Any,
         query: Any,
+        collection: Any = None,
+        start_date: Any = None,
+        end_date: Any = None,
+        city: Any = None,
+        state: Any = None,
+        country: Any = None,
         *,
         error_type: type[Exception] = HistoryError,
-    ) -> tuple[str, str | None, str | None]:
+    ) -> tuple[
+        str,
+        str | None,
+        str | None,
+        str | None,
+        str | None,
+        str | None,
+        str | None,
+        str | None,
+        str | None,
+    ]:
         if not isinstance(kind, str) or kind not in cls.SOURCE_KINDS:
             raise error_type("invalid photo source kind")
         if kind in {"album", "person"}:
-            if not isinstance(source_id, str) or query is not None:
+            if not isinstance(source_id, str) or any(
+                value is not None
+                for value in (query, collection, start_date, end_date, city, state, country)
+            ):
                 raise error_type("invalid photo source fields")
             try:
                 normalized_id = str(UUID(source_id))
             except ValueError:
                 raise error_type("invalid photo source ID") from None
-            return kind, normalized_id, None
+            return kind, normalized_id, None, None, None, None, None, None, None
         if kind == "search":
-            if source_id is not None or not isinstance(query, str):
+            if (
+                source_id is not None
+                or not isinstance(query, str)
+                or any(
+                    value is not None
+                    for value in (collection, start_date, end_date, city, state, country)
+                )
+            ):
                 raise error_type("invalid photo source fields")
             normalized_query = query.strip()
             if not normalized_query or len(normalized_query) > 200:
                 raise error_type("invalid photo source query")
-            return kind, None, normalized_query
-        if source_id is not None or query is not None:
+            return kind, None, normalized_query, None, None, None, None, None, None
+        if kind == "event":
+            if collection not in cls.EVENT_COLLECTIONS or any(
+                value is not None for value in (query, start_date, end_date, city, state, country)
+            ):
+                raise error_type("invalid event collection")
+            if collection == "family_recap":
+                if not isinstance(source_id, str):
+                    raise error_type("invalid photo source ID")
+                try:
+                    event_source_id = str(UUID(source_id))
+                except ValueError:
+                    raise error_type("invalid photo source ID") from None
+                return kind, event_source_id, None, collection, None, None, None, None, None
+            elif source_id is not None:
+                raise error_type("invalid photo source fields")
+            return kind, None, None, collection, None, None, None, None, None
+        if kind == "filter":
+            if any(value is not None for value in (source_id, query, collection)):
+                raise error_type("invalid photo source fields")
+            normalized_dates: list[str | None] = []
+            for value in (start_date, end_date):
+                if value is None:
+                    normalized_dates.append(None)
+                    continue
+                if not isinstance(value, str):
+                    raise error_type("invalid photo source date")
+                try:
+                    normalized_dates.append(date.fromisoformat(value).isoformat())
+                except ValueError:
+                    raise error_type("invalid photo source date") from None
+            if (
+                normalized_dates[0]
+                and normalized_dates[1]
+                and normalized_dates[0] > normalized_dates[1]
+            ):
+                raise error_type("photo source start date must not follow end date")
+            locations: list[str | None] = []
+            for value in (city, state, country):
+                if value is None:
+                    locations.append(None)
+                    continue
+                if not isinstance(value, str) or not value.strip() or len(value.strip()) > 100:
+                    raise error_type("invalid photo source location")
+                locations.append(value.strip())
+            if not any((*normalized_dates, *locations)):
+                raise error_type("photo source filter must not be empty")
+            return (
+                kind,
+                None,
+                None,
+                None,
+                normalized_dates[0],
+                normalized_dates[1],
+                locations[0],
+                locations[1],
+                locations[2],
+            )
+        if any(
+            value is not None
+            for value in (source_id, query, collection, start_date, end_date, city, state, country)
+        ):
             raise error_type("invalid photo source fields")
-        return kind, None, None
+        return kind, None, None, None, None, None, None, None, None
 
     @staticmethod
     def _parse_record(value: Any) -> DisplayRecord:
@@ -318,6 +486,12 @@ class HistoryStore:
                     "source_kind": state.source_kind,
                     "source_id": state.source_id,
                     "source_query": state.source_query,
+                    "source_collection": state.source_collection,
+                    "source_start_date": state.source_start_date,
+                    "source_end_date": state.source_end_date,
+                    "source_city": state.source_city,
+                    "source_state": state.source_state,
+                    "source_country": state.source_country,
                     "recent_asset_ids": list(state.recent_asset_ids),
                     "records": [
                         {

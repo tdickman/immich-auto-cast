@@ -5,7 +5,7 @@ import ipaddress
 import secrets
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from importlib.resources import files
 from typing import Any
 from urllib.parse import urlsplit
@@ -17,7 +17,7 @@ from .cast import DiscoveryError
 from .config import default_form_values
 from .coordinator import Command, CommandResult, CoordinatorSnapshot
 from .history import DisplayRecord, HistoryError
-from .immich import AssetUnavailable, ImmichError, PhotoSource, SourceKind
+from .immich import AssetUnavailable, EventCollection, ImmichError, PhotoSource, SourceKind
 from .relay import ALLOWED_IMAGE_TYPES
 from .runtime import ApplyStatus, ConfigSnapshot, OutputSnapshot, RuntimeSnapshot, RuntimeSupervisor
 
@@ -276,9 +276,15 @@ def create_management_app(
         try:
             kind = SourceKind(kind_value or "timeline")
         except (TypeError, ValueError):
-            return _error(400, "invalid_request", "kind must be timeline, album, person, or search")
+            return _error(400, "invalid_request", "unknown photo source kind")
         source_id: UUID | None = None
         query: str | None = None
+        collection: EventCollection | None = None
+        start_date: date | None = None
+        end_date: date | None = None
+        city: str | None = None
+        region: str | None = None
+        country: str | None = None
         if kind in {SourceKind.ALBUM, SourceKind.PERSON}:
             value = body.get("id", body.get("album_id"))
             try:
@@ -290,7 +296,66 @@ def create_management_app(
             if not isinstance(value, str) or not value.strip() or len(value.strip()) > 200:
                 return _error(400, "invalid_request", "query must contain 1 to 200 characters")
             query = value.strip()
-        selected = PhotoSource(kind, source_id, query)
+        elif kind is SourceKind.EVENT:
+            try:
+                collection_value = body.get("collection")
+                if not isinstance(collection_value, str):
+                    raise ValueError
+                collection = EventCollection(collection_value)
+            except (TypeError, ValueError):
+                return _error(400, "invalid_request", "unknown event collection")
+            if collection is EventCollection.FAMILY_RECAP:
+                try:
+                    source_id = UUID(body.get("id"))
+                except (TypeError, ValueError):
+                    return _error(400, "invalid_request", "family recap person id must be a UUID")
+        elif kind is SourceKind.FILTER:
+            parsed_dates: list[date | None] = []
+            for field in ("start_date", "end_date"):
+                value = body.get(field)
+                if value is None or value == "":
+                    parsed_dates.append(None)
+                    continue
+                if not isinstance(value, str):
+                    return _error(400, "invalid_request", f"{field} must be an ISO date")
+                try:
+                    parsed_dates.append(date.fromisoformat(value))
+                except ValueError:
+                    return _error(400, "invalid_request", f"{field} must be an ISO date")
+            start_date, end_date = parsed_dates
+            if start_date is not None and end_date is not None and start_date > end_date:
+                return _error(400, "invalid_request", "start_date must not follow end_date")
+            locations: list[str | None] = []
+            for field in ("city", "state", "country"):
+                value = body.get(field)
+                if value is None or value == "":
+                    locations.append(None)
+                elif isinstance(value, str) and 1 <= len(value.strip()) <= 100:
+                    locations.append(value.strip())
+                else:
+                    return _error(
+                        400,
+                        "invalid_request",
+                        f"{field} must contain at most 100 characters",
+                    )
+            city, region, country = locations
+            if not any((start_date, end_date, city, region, country)):
+                return _error(
+                    400,
+                    "invalid_request",
+                    "at least one date or location filter is required",
+                )
+        selected = PhotoSource(
+            kind=kind,
+            id=source_id,
+            query=query,
+            collection=collection,
+            start_date=start_date,
+            end_date=end_date,
+            city=city,
+            state=region,
+            country=country,
+        )
         try:
             applied = await supervisor.select_source(
                 output_id,
@@ -556,13 +621,7 @@ def _legacy_output_json(output: OutputSnapshot, active: bool) -> dict[str, Any]:
             if coordinator.rotation_deadline is not None
             else None
         ),
-        "source": _source_json(
-            PhotoSource(
-                coordinator.source_kind,
-                coordinator.selected_album or coordinator.selected_person,
-                coordinator.search_query,
-            )
-        ),
+        "source": _source_json(coordinator.source),
         "available_actions": {
             "pause": active and rotation_enabled,
             "enable": active and not rotation_enabled,
@@ -605,6 +664,12 @@ def _source_json(source: PhotoSource) -> dict[str, str | None]:
         "kind": source.kind.value,
         "id": str(source.id) if source.id is not None else None,
         "query": source.query,
+        "collection": source.collection.value if source.collection is not None else None,
+        "start_date": source.start_date.isoformat() if source.start_date is not None else None,
+        "end_date": source.end_date.isoformat() if source.end_date is not None else None,
+        "city": source.city,
+        "state": source.state,
+        "country": source.country,
     }
 
 

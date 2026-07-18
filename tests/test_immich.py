@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import date
 from typing import Any
 from uuid import UUID
 
@@ -10,6 +11,7 @@ from aiohttp import web
 from cast_immich.config import ImmichSettings
 from cast_immich.immich import (
     AssetUnavailable,
+    EventCollection,
     ImmichClient,
     ImmichFailureKind,
     PermanentImmichError,
@@ -258,6 +260,98 @@ async def test_ai_search_uses_smart_search_contract(serve_app: Any) -> None:
     assert observed["body"]["query"] == "snowy mountains"
     assert observed["body"]["page"] == 1
     assert observed["body"]["size"] == 40
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (
+            PhotoSource(SourceKind.EVENT, collection=EventCollection.RECENT_FAVORITES),
+            {"isFavorite": True, "takenAfter": "2026-04-19T00:00:00Z"},
+        ),
+        (
+            PhotoSource(SourceKind.EVENT, collection=EventCollection.LAST_MONTH),
+            {
+                "takenAfter": "2026-06-01T00:00:00Z",
+                "takenBefore": "2026-07-01T00:00:00Z",
+            },
+        ),
+        (
+            PhotoSource(
+                SourceKind.EVENT,
+                UUID(int=42),
+                collection=EventCollection.FAMILY_RECAP,
+            ),
+            {
+                "personIds": [str(UUID(int=42))],
+                "takenAfter": "2025-07-18T00:00:00Z",
+            },
+        ),
+        (
+            PhotoSource(
+                SourceKind.FILTER,
+                start_date=date(2020, 1, 2),
+                end_date=date(2020, 2, 3),
+                city="Bath",
+                state="Somerset",
+                country="United Kingdom",
+            ),
+            {
+                "takenAfter": "2020-01-02T00:00:00Z",
+                "takenBefore": "2020-02-04T00:00:00Z",
+                "city": "Bath",
+                "state": "Somerset",
+                "country": "United Kingdom",
+            },
+        ),
+    ],
+)
+async def test_event_and_custom_filters_use_random_search_contract(
+    serve_app: Any, source: PhotoSource, expected: dict[str, Any]
+) -> None:
+    observed: dict[str, Any] = {}
+
+    async def search(request: web.Request) -> web.Response:
+        observed.update(await request.json())
+        return web.json_response([eligible(visibility="archive")])
+
+    app = web.Application()
+    app.router.add_post("/api/search/random", search)
+    server = await serve_app(app)
+    settings = ImmichSettings(str(server.make_url("/")).rstrip("/"), "secret", 2, 1)
+    async with ImmichClient(settings, today=lambda: date(2026, 7, 18)) as client:
+        selected = await client.select_assets_for(set(), 20, 1, source)
+
+    assert selected[0].id == ASSET_ID
+    assert {key: observed[key] for key in expected} == expected
+
+
+@pytest.mark.asyncio
+async def test_on_this_day_keeps_only_matching_dates_from_prior_years(serve_app: Any) -> None:
+    other_id = UUID(int=2)
+    observed: dict[str, Any] = {}
+
+    async def search(request: web.Request) -> web.Response:
+        observed.update(await request.json())
+        return web.json_response(
+            [
+                eligible(localDateTime="2019-07-18T09:00:00"),
+                eligible(other_id, localDateTime="2019-07-19T09:00:00"),
+            ]
+        )
+
+    app = web.Application()
+    app.router.add_post("/api/search/random", search)
+    server = await serve_app(app)
+    settings = ImmichSettings(str(server.make_url("/")).rstrip("/"), "secret", 2, 1)
+    source = PhotoSource(SourceKind.EVENT, collection=EventCollection.ON_THIS_DAY)
+    async with ImmichClient(settings, today=lambda: date(2026, 7, 18)) as client:
+        selected = await client.select_assets_for(set(), 20, 2, source)
+
+    assert [asset.id for asset in selected] == [ASSET_ID]
+    assert observed["takenBefore"] == "2026-01-01T00:00:00Z"
+    assert observed["size"] == 1000
 
 
 @pytest.mark.asyncio

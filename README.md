@@ -1,6 +1,6 @@
 # cast-immich
 
-`cast-immich` displays Immich timeline, album, person, or AI-search photos on one or more Chromecasts while each receiver is confidently idle. A trusted-LAN dashboard provides independent source selection, live controls, configuration, history, and queues for every output. The service yields to paused, playing, buffering, external, and unknown sessions.
+`cast-immich` displays Immich timeline, album, person, AI-search, event, or filtered photos on one or more Chromecasts while each receiver is confidently idle. A trusted-LAN dashboard provides independent source selection, live controls, configuration, history, and queues for every output. The service yields to paused, playing, buffering, external, and unknown sessions.
 
 ## Requirements
 
@@ -85,7 +85,7 @@ Changing the Immich server origin requires entering a replacement API key in the
 
 The dashboard uses same-origin JSON endpoints under `/api`. Status, config, discovery, albums, and people are shared. Output operations are scoped under `/api/outputs/{output_id}` for source, seek, reconnect, controls, history, and current/upcoming/history thumbnails. Mutation clients must first read the CSRF token from status/config, then send the exact page `Origin`, `Content-Type: application/json`, `X-Cast-Immich-Request: 1`, and `X-CSRF-Token`. Configuration writes include the current revision; controls include a stable request ID for idempotency. Command responses echo the request ID, command, outcome, and resulting sanitized status.
 
-The selected source can be the normal timeline, an album, a detected person, or an Immich AI search term. Trashed, offline, video, and audio assets are always excluded; timeline mode also excludes archived, hidden, locked, and shared-album-only assets. The relayed image includes its capture date beneath the location when Immich provides that metadata.
+The selected source can be the normal timeline, an album, a detected person, an Immich AI search term, an event collection, or a date/location filter. Event collections include photos from this day in prior years, favorites from the last 90 days, the previous calendar month, the current season in prior years, and a one-year recap for a selected person. Date bounds are inclusive; city, state/region, and country filters use Immich's metadata fields. Trashed, offline, video, and audio assets are always excluded; timeline mode also excludes archived, hidden, locked, and shared-album-only assets. The relayed image includes its capture date beneath the location when Immich provides that metadata.
 
 ## Network
 

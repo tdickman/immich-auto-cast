@@ -64,7 +64,8 @@ h2 { margin: 0; font-size: 2rem; letter-spacing: -.025em; }
 .source-control label { margin-top: .65rem; }
 .source-control select, .source-control input { margin-top: .2rem; border-color: #46504b; color: #f7f6f2; background: #242d29; }
 .source-control input::placeholder { color: #89928d; }
-#album-source, #person-source, #search-source { display: none; }
+#album-source, #person-source, #search-source, #filter-source { display: none; }
+.source-filter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .25rem .65rem; }
 .source-apply { margin-top: .55rem; padding: .55rem .8rem; border: 1px solid #59645e; border-radius: 8px; color: #f7f6f2; background: #303a35; }
 .transport { display: grid; grid-template-columns: 1fr 1fr; gap: .65rem; margin-top: 3rem; }
 .control-button { min-height: 64px; padding: .9rem 1rem; display: flex; align-items: center; gap: .75rem; border: 1px solid #46504b; border-radius: 12px; color: inherit; background: #242d29; text-align: left; transition: border-color .18s, background .18s, transform .18s; }
@@ -190,6 +191,7 @@ input:focus, select:focus { border-color: var(--accent); outline: 0; box-shadow:
   h1 { font-size: 3rem; }
   .stage-note { margin-top: 1.25rem; font-size: .9rem; }
   .transport { grid-template-columns: 1fr 1fr; gap: .5rem; margin-top: 2rem; }
+  .source-filter-grid { grid-template-columns: 1fr; }
   .control-button { min-height: 58px; padding: .7rem; font-size: .83rem; }
   .gallery-panel { padding: 1.1rem; }
   .now-panel { padding: 1.25rem; }

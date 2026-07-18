@@ -4,7 +4,8 @@ import asyncio
 import logging
 import time
 from collections import OrderedDict, deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import date
 from enum import StrEnum
 from typing import Protocol
 from uuid import UUID, uuid4
@@ -22,6 +23,7 @@ from .history import DisplayRecord, HistoryState
 from .immich import (
     Asset,
     AssetUnavailable,
+    EventCollection,
     ImmichError,
     ImmichFailureKind,
     PhotoSource,
@@ -104,7 +106,16 @@ class HistoryPersistence(Protocol):
     def set_autocast_enabled(self, enabled: bool) -> HistoryState: ...
 
     def set_source(
-        self, kind: str, source_id: str | None = None, query: str | None = None
+        self,
+        kind: str,
+        source_id: str | None = None,
+        query: str | None = None,
+        collection: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        city: str | None = None,
+        state: str | None = None,
+        country: str | None = None,
     ) -> HistoryState: ...
 
     def record_display(self, load_id: str, asset_id: str) -> DisplayRecord: ...
@@ -150,6 +161,7 @@ class CoordinatorSnapshot:
     health_message: str = "Connecting to Chromecast"
     retry_deadline: float | None = None
     rotation_deadline: float | None = None
+    source: PhotoSource = field(default_factory=PhotoSource)
 
 
 @dataclass(frozen=True, slots=True)
@@ -351,7 +363,17 @@ class Coordinator:
             self._rotation_enabled = state.rotation_enabled
             self._autocast_enabled = state.autocast_enabled
             source_id = UUID(state.source_id) if state.source_id is not None else None
-            self._source = PhotoSource(SourceKind(state.source_kind), source_id, state.source_query)
+            self._source = PhotoSource(
+                SourceKind(state.source_kind),
+                source_id,
+                state.source_query,
+                EventCollection(state.source_collection) if state.source_collection else None,
+                date.fromisoformat(state.source_start_date) if state.source_start_date else None,
+                date.fromisoformat(state.source_end_date) if state.source_end_date else None,
+                state.source_city,
+                state.source_state,
+                state.source_country,
+            )
             recent = state.recent_asset_ids or tuple(record.asset_id for record in state.records)
             self._recent.extend(UUID(asset_id) for asset_id in reversed(recent))
         except Exception:
@@ -432,6 +454,16 @@ class Coordinator:
                     event.source.kind.value,
                     str(event.source.id) if event.source.id is not None else None,
                     event.source.query,
+                    event.source.collection.value if event.source.collection is not None else None,
+                    event.source.start_date.isoformat()
+                    if event.source.start_date is not None
+                    else None,
+                    event.source.end_date.isoformat()
+                    if event.source.end_date is not None
+                    else None,
+                    event.source.city,
+                    event.source.state,
+                    event.source.country,
                 )
             except Exception:
                 self._error = "history persistence failed"
@@ -1117,6 +1149,7 @@ class Coordinator:
             health_message=message,
             retry_deadline=self._retry_deadline,
             rotation_deadline=self._rotation_deadline,
+            source=self._source,
         )
 
     def _health(self) -> tuple[HealthLevel, str, str]:

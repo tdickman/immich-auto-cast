@@ -52,6 +52,12 @@
                   <option value="album">Album</option>
                   <option value="person">Person</option>
                   <option value="search">AI search</option>
+                  <option value="event:on_this_day">On this day</option>
+                  <option value="event:recent_favorites">Recent favorites</option>
+                  <option value="event:last_month">Last month</option>
+                  <option value="event:seasonal">Seasonal photos</option>
+                  <option value="event:family_recap">Family recap</option>
+                  <option value="filter">Date or location</option>
                 </select>
               </label>
               <label id="album-source">Album
@@ -63,6 +69,16 @@
               <form id="search-source">
                 <label>AI search term<input id="search-query" maxlength="200" placeholder="e.g. snowy mountains"></label>
                 <button class="source-apply" type="submit">Use search</button>
+              </form>
+              <form id="filter-source">
+                <div class="source-filter-grid">
+                  <label>From date<input id="filter-start-date" type="date"></label>
+                  <label>Through date<input id="filter-end-date" type="date"></label>
+                  <label>City<input id="filter-city" maxlength="100" placeholder="e.g. Bristol"></label>
+                  <label>State or region<input id="filter-state" maxlength="100" placeholder="e.g. Somerset"></label>
+                  <label>Country<input id="filter-country" maxlength="100" placeholder="e.g. United Kingdom"></label>
+                </div>
+                <button class="source-apply" type="submit">Use filters</button>
               </form>
             </div>
           </div>

@@ -87,6 +87,10 @@ function sourceDraft(outputId) {
   return state.sourceDrafts.get(outputId);
 }
 
+function sourceSelection(source) {
+  return source?.kind === "event" ? `event:${source.collection}` : source?.kind || "timeline";
+}
+
 function setSelectedOutput(outputId) {
   if (!state.outputs.has(outputId)) return;
   document.activeElement?.blur();
@@ -190,17 +194,24 @@ function renderSelectedWorkspace() {
   const canStop = actionAvailable(output, "stop");
   stop.hidden = !canStop;
   stop.disabled = state.commandInFlight.has(`${outputId}:stop`) || !canStop;
-  document.querySelector(".source-apply").disabled = !active || draft.changing;
-  ["#source-kind", "#album-select", "#person-select", "#search-query"].forEach(selector => {
+  document.querySelectorAll(".source-apply").forEach(button => { button.disabled = !active || draft.changing; });
+  ["#source-kind", "#album-select", "#person-select", "#search-query", "#filter-start-date", "#filter-end-date", "#filter-city", "#filter-state", "#filter-country"].forEach(selector => {
     document.querySelector(selector).disabled = !active || draft.changing;
   });
   const source = output.source || { kind: "timeline" };
-  const kind = draft.pendingKind || source.kind || "timeline";
+  const kind = draft.pendingKind || sourceSelection(source);
   document.querySelector("#source-kind").value = kind;
   document.querySelector("#album-select").value = kind === "album" ? source.id || "" : "";
-  document.querySelector("#person-select").value = kind === "person" ? source.id || "" : "";
+  document.querySelector("#person-select").value = ["person", "event:family_recap"].includes(kind) ? source.id || "" : "";
   const search = document.querySelector("#search-query");
   if (!draft.searchDirty && document.activeElement !== search) search.value = source.kind === "search" ? source.query || "" : draft.searchQuery;
+  if (source.kind === "filter" && !draft.pendingKind) {
+    document.querySelector("#filter-start-date").value = source.start_date || "";
+    document.querySelector("#filter-end-date").value = source.end_date || "";
+    document.querySelector("#filter-city").value = source.city || "";
+    document.querySelector("#filter-state").value = source.state || "";
+    document.querySelector("#filter-country").value = source.country || "";
+  }
   showSourceControl(kind);
   renderAutocastControl();
   renderNextPhotoCountdown();
@@ -470,8 +481,9 @@ function renderHistory(outputId) {
 
 function showSourceControl(kind) {
   document.querySelector("#album-source").style.display = kind === "album" ? "grid" : "none";
-  document.querySelector("#person-source").style.display = kind === "person" ? "grid" : "none";
+  document.querySelector("#person-source").style.display = ["person", "event:family_recap"].includes(kind) ? "grid" : "none";
   document.querySelector("#search-source").style.display = kind === "search" ? "block" : "none";
+  document.querySelector("#filter-source").style.display = kind === "filter" ? "block" : "none";
 }
 
 async function applySource(outputId, source, message) {
@@ -868,6 +880,10 @@ document.querySelector("#source-kind").addEventListener("change", event => {
   sourceDraft(outputId).pendingKind = kind === "timeline" ? null : kind;
   showSourceControl(kind);
   if (kind === "timeline") applySource(outputId, { kind }, "Using the full timeline");
+  else if (kind.startsWith("event:") && kind !== "event:family_recap") {
+    const collection = kind.slice("event:".length);
+    applySource(outputId, { kind: "event", collection }, `Using ${event.currentTarget.selectedOptions[0].textContent}`);
+  }
 });
 document.querySelector("#album-select").addEventListener("change", event => {
   const outputId = state.selectedOutputId;
@@ -875,7 +891,12 @@ document.querySelector("#album-select").addEventListener("change", event => {
 });
 document.querySelector("#person-select").addEventListener("change", event => {
   const outputId = state.selectedOutputId;
-  if (event.currentTarget.value) applySource(outputId, { kind: "person", id: event.currentTarget.value }, `Showing ${event.currentTarget.selectedOptions[0].textContent}`);
+  if (!event.currentTarget.value) return;
+  const familyRecap = document.querySelector("#source-kind").value === "event:family_recap";
+  const source = familyRecap
+    ? { kind: "event", collection: "family_recap", id: event.currentTarget.value }
+    : { kind: "person", id: event.currentTarget.value };
+  applySource(outputId, source, `${familyRecap ? "Recapping" : "Showing"} ${event.currentTarget.selectedOptions[0].textContent}`);
 });
 document.querySelector("#search-source").addEventListener("submit", event => {
   event.preventDefault();
@@ -887,6 +908,16 @@ document.querySelector("#search-query").addEventListener("input", event => {
   const draft = sourceDraft(state.selectedOutputId);
   draft.searchDirty = true;
   draft.searchQuery = event.currentTarget.value;
+});
+document.querySelector("#filter-source").addEventListener("submit", event => {
+  event.preventDefault();
+  const source = { kind: "filter" };
+  for (const field of ["start_date", "end_date", "city", "state", "country"]) {
+    const value = document.querySelector(`#filter-${field.replaceAll("_", "-")}`).value.trim();
+    if (value) source[field] = value;
+  }
+  if (Object.keys(source).length > 1) applySource(state.selectedOutputId, source, "Using date and location filters");
+  else notify("Choose at least one date or location filter", true);
 });
 document.querySelector("#discover-button").addEventListener("click", async event => {
   const button = event.currentTarget;

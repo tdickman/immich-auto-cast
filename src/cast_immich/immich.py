@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import random
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
 from typing import Any
 from uuid import UUID
@@ -64,6 +65,16 @@ class SourceKind(StrEnum):
     ALBUM = "album"
     PERSON = "person"
     SEARCH = "search"
+    EVENT = "event"
+    FILTER = "filter"
+
+
+class EventCollection(StrEnum):
+    ON_THIS_DAY = "on_this_day"
+    RECENT_FAVORITES = "recent_favorites"
+    LAST_MONTH = "last_month"
+    SEASONAL = "seasonal"
+    FAMILY_RECAP = "family_recap"
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +82,12 @@ class PhotoSource:
     kind: SourceKind = SourceKind.TIMELINE
     id: UUID | None = None
     query: str | None = None
+    collection: EventCollection | None = None
+    start_date: date | None = None
+    end_date: date | None = None
+    city: str | None = None
+    state: str | None = None
+    country: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,11 +114,14 @@ class ImmichClient:
         self,
         settings: ImmichSettings,
         session: aiohttp.ClientSession | None = None,
+        *,
+        today: Callable[[], date] = date.today,
     ) -> None:
         self._settings = settings
         self._session = session
         self._owns_session = session is None
         self._metadata: dict[UUID, tuple[str | None, str | None]] = {}
+        self._today = today
 
     async def __aenter__(self) -> ImmichClient:
         await self.start()
@@ -165,6 +185,10 @@ class ImmichClient:
         elif source.kind is SourceKind.SEARCH and source.query:
             payload["query"] = source.query
             payload["page"] = 1
+        elif source.kind is SourceKind.EVENT and source.collection is not None:
+            self._apply_event_filter(payload, source)
+        elif source.kind is SourceKind.FILTER:
+            self._apply_custom_filter(payload, source)
         else:
             raise ValueError("invalid photo source")
         path = "/api/search/smart" if source.kind is SourceKind.SEARCH else "/api/search/random"
@@ -175,6 +199,8 @@ class ImmichClient:
 
         candidates: dict[UUID, Asset] = {}
         for item in values:
+            if not self._matches_event(item, source):
+                continue
             asset = self._parse_eligible_asset(
                 item, require_timeline=source.kind is SourceKind.TIMELINE
             )
@@ -186,6 +212,94 @@ class ImmichClient:
         selected = list(candidates.values())
         random.SystemRandom().shuffle(selected)
         return tuple(selected[:count])
+
+    def _apply_event_filter(self, payload: dict[str, Any], source: PhotoSource) -> None:
+        today = self._today()
+        collection = source.collection
+        if collection is EventCollection.RECENT_FAVORITES:
+            payload["isFavorite"] = True
+            payload["takenAfter"] = self._date_time(today - timedelta(days=90))
+        elif collection is EventCollection.LAST_MONTH:
+            this_month = today.replace(day=1)
+            last_month = (this_month - timedelta(days=1)).replace(day=1)
+            payload["takenAfter"] = self._date_time(last_month)
+            payload["takenBefore"] = self._date_time(this_month)
+        elif collection is EventCollection.FAMILY_RECAP and source.id is not None:
+            payload["personIds"] = [str(source.id)]
+            payload["takenAfter"] = self._date_time(today - timedelta(days=365))
+        elif collection in {EventCollection.ON_THIS_DAY, EventCollection.SEASONAL}:
+            payload["takenBefore"] = self._date_time(today.replace(month=1, day=1))
+            payload["size"] = 1000
+        else:
+            raise ValueError("invalid event collection")
+
+    @classmethod
+    def _apply_custom_filter(cls, payload: dict[str, Any], source: PhotoSource) -> None:
+        if source.start_date is not None:
+            payload["takenAfter"] = cls._date_time(source.start_date)
+        if source.end_date is not None:
+            payload["takenBefore"] = cls._date_time(source.end_date + timedelta(days=1))
+        for field in ("city", "state", "country"):
+            value = getattr(source, field)
+            if value:
+                payload[field] = value
+        if not any(
+            value is not None
+            for value in (
+                source.start_date,
+                source.end_date,
+                source.city,
+                source.state,
+                source.country,
+            )
+        ):
+            raise ValueError("invalid custom photo filter")
+
+    def _matches_event(self, value: object, source: PhotoSource) -> bool:
+        if source.kind is not SourceKind.EVENT or source.collection not in {
+            EventCollection.ON_THIS_DAY,
+            EventCollection.SEASONAL,
+        }:
+            return True
+        captured = self._asset_datetime(value)
+        if captured is None:
+            return False
+        today = self._today()
+        if source.collection is EventCollection.ON_THIS_DAY:
+            return (captured.month, captured.day) == (today.month, today.day)
+        return captured.month in self._season_months(today.month)
+
+    @staticmethod
+    def _date_time(value: date) -> str:
+        return datetime.combine(value, datetime.min.time(), UTC).isoformat().replace("+00:00", "Z")
+
+    @staticmethod
+    def _season_months(month: int) -> frozenset[int]:
+        if month in {12, 1, 2}:
+            return frozenset({12, 1, 2})
+        if month in {3, 4, 5}:
+            return frozenset({3, 4, 5})
+        if month in {6, 7, 8}:
+            return frozenset({6, 7, 8})
+        return frozenset({9, 10, 11})
+
+    @staticmethod
+    def _asset_datetime(value: object) -> datetime | None:
+        if not isinstance(value, dict):
+            return None
+        exif = value.get("exifInfo")
+        candidates = (
+            value.get("localDateTime"),
+            exif.get("dateTimeOriginal") if isinstance(exif, dict) else None,
+            value.get("fileCreatedAt"),
+        )
+        for candidate in candidates:
+            if isinstance(candidate, str):
+                try:
+                    return datetime.fromisoformat(candidate.strip().replace("Z", "+00:00"))
+                except ValueError:
+                    pass
+        return None
 
     async def list_albums(self) -> tuple[Album, ...]:
         data = await self._json_request("GET", "/api/albums")

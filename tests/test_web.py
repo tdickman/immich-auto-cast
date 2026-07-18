@@ -12,7 +12,7 @@ from cast_immich.cast import DiscoveredChromecast
 from cast_immich.config import SecretSource, default_form_values
 from cast_immich.coordinator import Command, CommandResult, CoordinatorSnapshot, State
 from cast_immich.history import DisplayRecord, HistoryState
-from cast_immich.immich import Album, AssetUnavailable, Preview
+from cast_immich.immich import Album, AssetUnavailable, PhotoSource, Preview
 from cast_immich.runtime import (
     ApplySettingsResult,
     ApplyStatus,
@@ -55,7 +55,7 @@ class FakeSupervisor:
         self.apply_calls: list[tuple[dict[str, dict[str, Any]], int]] = []
         self.command_calls: list[tuple[Command, str]] = []
         self.seek_calls: list[tuple[str, str, str]] = []
-        self.source_calls: list[UUID | None] = []
+        self.source_calls: list[PhotoSource | UUID | None] = []
         self.discovery_calls = 0
         self.reconnect_calls = 0
         self.apply_status = ApplyStatus.APPLIED
@@ -91,9 +91,9 @@ class FakeSupervisor:
     async def albums(self) -> tuple[Album, ...]:
         return (Album(UUID(int=7), "Summer", 24),)
 
-    async def select_source(self, output_id: str, album_id: UUID | None) -> bool:
+    async def select_source(self, output_id: str, source: PhotoSource | UUID | None) -> bool:
         assert output_id == "living-room"
-        self.source_calls.append(album_id)
+        self.source_calls.append(source)
         return True
 
     async def seek(
@@ -462,6 +462,28 @@ async def test_album_source_and_photo_seek_use_guarded_operations(
     assert source.status == seek.status == 200
     assert supervisor.source_calls == [album_id]
     assert supervisor.seek_calls == [("upcoming", str(UPCOMING_ID), "seek-1")]
+
+
+async def test_event_and_filter_sources_are_structured(
+    management: tuple[TestClient[Any, Any], FakeSupervisor, str],
+) -> None:
+    client, supervisor, origin = management
+    event = await client.post(
+        "/api/outputs/living-room/source",
+        headers=mutation_headers(origin),
+        json={"kind": "event", "collection": "on_this_day"},
+    )
+    filtered = await client.post(
+        "/api/outputs/living-room/source",
+        headers=mutation_headers(origin),
+        json={"kind": "filter", "start_date": "2020-01-02", "city": " Bath "},
+    )
+
+    assert event.status == filtered.status == 200
+    assert isinstance(supervisor.source_calls[0], PhotoSource)
+    assert supervisor.source_calls[0].collection.value == "on_this_day"
+    assert supervisor.source_calls[1].start_date.isoformat() == "2020-01-02"
+    assert supervisor.source_calls[1].city == "Bath"
 
 
 async def test_history_is_opaque_and_thumbnail_rejects_arbitrary_ids(

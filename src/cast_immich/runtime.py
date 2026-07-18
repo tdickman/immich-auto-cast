@@ -30,6 +30,7 @@ from .history import HistoryState, HistoryStore, OutputHistory
 from .immich import (
     Album,
     AssetUnavailable,
+    EventCollection,
     ImmichClient,
     Person,
     PhotoSource,
@@ -300,6 +301,12 @@ class ServiceGraph:
         if normalized.kind is SourceKind.PERSON and normalized.id not in {
             person.id for person in await self.people()
         }:
+            return False
+        if (
+            normalized.kind is SourceKind.EVENT
+            and normalized.collection is EventCollection.FAMILY_RECAP
+            and normalized.id not in {person.id for person in await self.people()}
+        ):
             return False
         return await output.coordinator.select_source(normalized)
 
