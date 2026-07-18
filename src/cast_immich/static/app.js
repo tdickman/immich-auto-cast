@@ -43,12 +43,12 @@ function renderStatus(payload) {
   document.querySelector("#signal-dot").className = `signal-dot ${active ? "active" : payload.error ? "error" : ""}`;
   document.querySelector("#cast-state").textContent = titleCase(coordinator?.state || mode);
   document.querySelector("#cast-detail").textContent = active
-    ? `Runtime generation ${payload.generation} · Cast generation ${coordinator?.generation || 0}`
-    : "Complete settings below to activate casting";
+    ? coordinator?.rotation_enabled ? "Automatic rotation is on" : "Automatic rotation is paused"
+    : "Open settings to finish setup";
   document.querySelector("#ownership-note").textContent = payload.error || coordinator?.error || (
     coordinator?.state === "owned"
-      ? "This service has verified ownership of the current photo."
-      : "External and uncertain playback remain protected."
+      ? "Ready to control this slideshow."
+      : "Waiting until the receiver is available."
   );
 
   const owned = coordinator?.state === "owned";
@@ -101,8 +101,8 @@ async function loadConfig() {
 
 async function loadHistory() {
   const payload = await request("/api/history");
-  document.querySelector("#history-count").textContent = `${payload.records.length} / 10`;
-  document.querySelector("#upcoming-count").textContent = `${payload.upcoming.length} / 10`;
+  document.querySelector("#history-count").textContent = String(payload.records.length);
+  document.querySelector("#upcoming-count").textContent = String(payload.upcoming.length);
   const signature = JSON.stringify([
     payload.records.map(record => [record.event_id, record.confirmed_at]),
     payload.upcoming.map(record => record.asset_id),
@@ -121,9 +121,7 @@ async function loadHistory() {
     const time = document.createElement("time");
     time.dateTime = record.confirmed_at;
     time.textContent = new Date(record.confirmed_at).toLocaleString();
-    const id = document.createElement("code");
-    id.textContent = record.asset_id;
-    caption.append(time, id);
+    caption.append(time);
     figure.append(image, caption);
     return figure;
   });
@@ -138,9 +136,7 @@ async function loadHistory() {
     const caption = document.createElement("figcaption");
     const position = document.createElement("strong");
     position.textContent = `NEXT ${String(index + 1).padStart(2, "0")}`;
-    const id = document.createElement("code");
-    id.textContent = record.asset_id;
-    caption.append(position, id);
+    caption.append(position);
     figure.append(image, caption);
     return figure;
   });

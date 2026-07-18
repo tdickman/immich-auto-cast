@@ -41,6 +41,8 @@ class AssetSelector(Protocol):
 
 
 class Relay(Protocol):
+    async def preload(self, asset_id: UUID) -> None: ...
+
     async def mint(self, asset_id: UUID) -> tuple[str, str]: ...
 
 
@@ -156,6 +158,7 @@ class Coordinator:
         self._nonce = 0
         self._timer: asyncio.Task[None] | None = None
         self._preparation: asyncio.Task[None] | None = None
+        self._preload: asyncio.Task[None] | None = None
         self._prepared: _PreparedEvent | None = None
         self._refresh: tuple[str, float] | None = None
         self._expected: tuple[str, str, UUID] | None = None
@@ -529,8 +532,22 @@ class Coordinator:
             self._complete_active(CommandResult.REFUSED_NOT_OWNED)
             return
         self._upcoming = deque(event.upcoming, maxlen=10)
+        if self._upcoming:
+            if self._preload is not None:
+                self._preload.cancel()
+            self._preload = asyncio.create_task(
+                self._preload_next(self._upcoming[0].id), name="immich-next-image-preload"
+            )
         self._prepared = event
         await self._request_refresh("next_load" if event.mode == "next" else "load")
+
+    async def _preload_next(self, asset_id: UUID) -> None:
+        try:
+            await self._relay.preload(asset_id)
+        except (asyncio.CancelledError, Exception) as error:
+            if isinstance(error, asyncio.CancelledError):
+                raise
+            logger.warning("next_image_preload_failed")
 
     async def _send_prepared_load(self) -> None:
         if self._abandon_cancelled_command():
@@ -669,6 +686,9 @@ class Coordinator:
         if self._preparation is not None:
             self._preparation.cancel()
             self._preparation = None
+        if self._preload is not None:
+            self._preload.cancel()
+            self._preload = None
         self._complete_active(CommandResult.REFUSED_NOT_OWNED)
 
     def _publish_snapshot(self) -> None:

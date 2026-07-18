@@ -72,6 +72,34 @@ async def test_preview_is_resized_to_cast_display_limit() -> None:
 
 
 @pytest.mark.asyncio
+async def test_preloaded_preview_is_reused_by_next_load() -> None:
+    class MultiSource:
+        def __init__(self) -> None:
+            self.calls: list[UUID] = []
+
+        async def fetch_preview(self, asset_id: UUID, max_bytes: int | None = None) -> Preview:
+            self.calls.append(asset_id)
+            color = "red" if asset_id == ASSET_ID else "blue"
+            output = io.BytesIO()
+            Image.new("RGB", (16, 9), color).save(output, format="PNG")
+            return Preview(output.getvalue(), "image/png")
+
+    next_id = UUID(int=2)
+    source = MultiSource()
+    relay = ImageRelay(settings(), source)
+
+    await relay.mint(ASSET_ID)
+    await relay.preload(next_id)
+    _url, content_type = await relay.mint(next_id)
+
+    capability = next(reversed(relay._tokens.values()))
+    assert source.calls == [ASSET_ID, next_id]
+    assert content_type == "image/jpeg"
+    with Image.open(io.BytesIO(capability.preview.body)) as image:
+        assert image.format == "JPEG"
+
+
+@pytest.mark.asyncio
 async def test_unknown_expired_and_unsupported_tokens_are_safe(serve_app: Any) -> None:
     now = [10.0]
     relay = ImageRelay(

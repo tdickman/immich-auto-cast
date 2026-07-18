@@ -30,6 +30,9 @@ class Selector:
 
 
 class Relay:
+    async def preload(self, asset_id: UUID) -> None:
+        pass
+
     async def mint(self, asset_id: UUID) -> tuple[str, str]:
         assert asset_id == ASSET_ID
         return "http://192.168.1.5:8787/image/opaque", "image/webp"
@@ -192,6 +195,9 @@ async def test_preparation_publishes_the_next_ten_assets_in_cast_order() -> None
             return assets
 
     class QueueRelay:
+        async def preload(self, asset_id: UUID) -> None:
+            pass
+
         async def mint(self, asset_id: UUID) -> tuple[str, str]:
             return f"http://192.168.1.5:8787/image/{asset_id}", "image/jpeg"
 
@@ -383,6 +389,9 @@ class BlockingRelay:
     def __init__(self) -> None:
         self.started = asyncio.Event()
         self.release = asyncio.Event()
+
+    async def preload(self, asset_id: UUID) -> None:
+        pass
 
     async def mint(self, asset_id: UUID) -> tuple[str, str]:
         self.started.set()

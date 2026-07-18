@@ -33,6 +33,7 @@ SAFE_HEADERS = {
 }
 MAX_CAST_SIZE = (1280, 720)
 MAX_IMAGE_PIXELS = 40_000_000
+PREVIEW_CACHE_SIZE = 3
 
 
 class PreviewSource(Protocol):
@@ -60,6 +61,8 @@ class ImageRelay:
         self._clock = clock
         self._max_tokens = max_tokens
         self._tokens: OrderedDict[str, Capability] = OrderedDict()
+        self._previews: OrderedDict[UUID, Preview] = OrderedDict()
+        self._preview_tasks: dict[UUID, asyncio.Task[Preview]] = {}
         self._semaphore = asyncio.Semaphore(settings.max_concurrent)
         self._app = web.Application(client_max_size=1024)
         self._app.router.add_route("*", "/image/{token}", self._handle)
@@ -79,24 +82,15 @@ class ImageRelay:
         while len(target._tokens) > target._max_tokens:
             target._tokens.popitem(last=False)
 
+    async def preload(self, asset_id: UUID) -> None:
+        """Fetch and normalize an image before the receiver needs it."""
+        await self._get_preview(asset_id)
+
     async def mint(self, asset_id: UUID) -> tuple[str, str]:
         if self._closed:
             raise AssetUnavailable("image relay is closed")
         self._purge()
-        task = asyncio.current_task()
-        if task is not None:
-            self._active_mints.add(task)
-        try:
-            async with self._semaphore:
-                preview = await self._source.fetch_preview(
-                    asset_id, self._settings.max_response_bytes
-                )
-                if preview.content_type not in ALLOWED_IMAGE_TYPES:
-                    raise AssetUnavailable("asset preview is not a supported image type")
-                preview = await asyncio.to_thread(_normalize_preview, preview)
-        finally:
-            if task is not None:
-                self._active_mints.discard(task)
+        preview = await self._get_preview(asset_id)
         if self._closed:
             raise AssetUnavailable("image relay is closed")
         token = secrets.token_urlsafe(24)
@@ -106,6 +100,37 @@ class ImageRelay:
         while len(self._tokens) > self._max_tokens:
             self._tokens.popitem(last=False)
         return f"{self._settings.advertised_base_url}/image/{token}", preview.content_type
+
+    async def _get_preview(self, asset_id: UUID) -> Preview:
+        if self._closed:
+            raise AssetUnavailable("image relay is closed")
+        preview = self._previews.get(asset_id)
+        if preview is not None:
+            self._previews.move_to_end(asset_id)
+            return preview
+        task = self._preview_tasks.get(asset_id)
+        if task is None:
+            task = asyncio.create_task(self._fetch_preview(asset_id), name="image-preview-fetch")
+            self._preview_tasks[asset_id] = task
+            self._active_mints.add(task)
+        try:
+            preview = await asyncio.shield(task)
+        finally:
+            if task.done():
+                self._preview_tasks.pop(asset_id, None)
+                self._active_mints.discard(task)
+        self._previews[asset_id] = preview
+        self._previews.move_to_end(asset_id)
+        while len(self._previews) > PREVIEW_CACHE_SIZE:
+            self._previews.popitem(last=False)
+        return preview
+
+    async def _fetch_preview(self, asset_id: UUID) -> Preview:
+        async with self._semaphore:
+            preview = await self._source.fetch_preview(asset_id, self._settings.max_response_bytes)
+            if preview.content_type not in ALLOWED_IMAGE_TYPES:
+                raise AssetUnavailable("asset preview is not a supported image type")
+            return await asyncio.to_thread(_normalize_preview, preview)
 
     async def start(self) -> None:
         if self._runner is not None:
@@ -131,6 +156,8 @@ class ImageRelay:
         if runner is not None:
             await runner.cleanup()
         self._tokens.clear()
+        self._previews.clear()
+        self._preview_tasks.clear()
 
     async def _handle(self, request: web.Request) -> web.Response:
         logger.info("image_requested")
