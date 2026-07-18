@@ -34,7 +34,7 @@ def test_metadata_stays_inside_title_safe_right_margin() -> None:
     assert bounds[2] <= image.width - min(image.size) // 20 + 1
 
 
-def test_device_time_is_an_accent_badge_above_metadata() -> None:
+def test_device_time_floats_above_metadata_with_a_subtle_accent() -> None:
     original = Image.new("RGB", (1280, 720), "black")
     plain = original.copy()
     timed = original.copy()
@@ -47,11 +47,10 @@ def test_device_time_is_an_accent_badge_above_metadata() -> None:
     assert plain_bounds is not None
     assert timed_bounds is not None
     assert timed_bounds[1] < plain_bounds[1]
+    time_area = timed.crop((900, timed_bounds[1], 1280, plain_bounds[1]))
+    assert any(min(pixel) > 150 for pixel in time_area.get_flattened_data())
     assert any(
-        red > green > blue and red > 100
-        for red, green, blue in timed.crop(
-            (900, timed_bounds[1], 1280, plain_bounds[1])
-        ).get_flattened_data()
+        red > green > blue and red > 100 for red, green, blue in time_area.get_flattened_data()
     )
 
 

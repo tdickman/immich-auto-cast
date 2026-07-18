@@ -558,19 +558,22 @@ def _draw_metadata(
             time_label = f"{time_label[:-4].rstrip()}..."
         box = draw.textbbox((0, 0), time_label, font=time_font)
         width, height = box[2] - box[0], box[3] - box[1]
-        gap = max(4, padding // 2) if labels else 0
-        time_bottom = metadata_top - gap
-        time_top = time_bottom - height - padding * 2
-        draw.rounded_rectangle(
-            (right - width - padding * 3, time_top, right, time_bottom),
-            radius=max(padding, (time_bottom - time_top) // 2),
-            fill=(238, 174, 74, 225),
+        gap = max(5, padding * 2 // 3)
+        line_y = metadata_top - gap
+        line_width = max(padding * 3, round(width * 0.4))
+        draw.line(
+            (right - line_width, line_y, right, line_y),
+            fill=(238, 174, 74, 175),
+            width=max(1, padding // 5),
         )
+        time_bottom = line_y - max(4, padding // 2)
         draw.text(
-            (right - padding * 3 // 2 - width, time_top + padding - box[1]),
+            (right - width, time_bottom - height - box[1]),
             time_label,
             font=time_font,
-            fill=(24, 21, 17, 255),
+            fill=(255, 255, 255, 220),
+            stroke_width=max(1, padding // 4),
+            stroke_fill=(0, 0, 0, 150),
         )
 
 
