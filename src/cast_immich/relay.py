@@ -558,15 +558,7 @@ def _draw_metadata(
             time_label = f"{time_label[:-4].rstrip()}..."
         box = draw.textbbox((0, 0), time_label, font=time_font)
         width, height = box[2] - box[0], box[3] - box[1]
-        gap = max(5, padding * 2 // 3)
-        line_y = metadata_top - gap
-        line_width = max(padding * 3, round(width * 0.4))
-        draw.line(
-            (right - line_width, line_y, right, line_y),
-            fill=(238, 174, 74, 175),
-            width=max(1, padding // 5),
-        )
-        time_bottom = line_y - max(4, padding // 2)
+        time_bottom = metadata_top - max(10, padding * 4 // 3)
         draw.text(
             (right - width, time_bottom - height - box[1]),
             time_label,
