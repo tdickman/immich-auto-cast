@@ -310,9 +310,10 @@ async def test_dashboard_assets_expose_complete_operator_interface(
     assert 'outputField("Vertical inset", "web_qr_inset_y"' in javascript
     assert 'outputField("QR surround opacity (%)", "web_qr_opacity"' in javascript
     assert 'outputField("Use lossless PNG for QR", "web_qr_lossless"' in javascript
+    assert 'outputField("QR quiet zone (modules)", "web_qr_quiet_zone"' in javascript
     assert 'className = "qr-placement-preview"' not in javascript
     assert 'badge.addEventListener("pointermove"' not in javascript
-    assert "Save changes to reload the current TV image" in javascript
+    assert "A quiet zone of 4 is recommended for scanning" in javascript
     assert "if (options.max) control.max = options.max" in javascript
     assert ".qr-placement-preview" not in css
     assert 'control.checked = value ?? field === "video_muted"' in javascript

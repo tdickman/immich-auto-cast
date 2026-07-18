@@ -25,6 +25,7 @@ web_qr_inset_x = 36
 web_qr_inset_y = 36
 web_qr_opacity = 75
 web_qr_lossless = false
+web_qr_quiet_zone = 4
 
 [relay]
 bind_host = "0.0.0.0"

@@ -56,6 +56,7 @@ def test_loads_normalized_settings_and_environment_secret(tmp_path: Path) -> Non
     assert settings.outputs[0].rotation.web_qr_inset_y == 36
     assert settings.outputs[0].rotation.web_qr_opacity == 75
     assert settings.outputs[0].rotation.web_qr_lossless is False
+    assert settings.outputs[0].rotation.web_qr_quiet_zone == 4
 
 
 def test_rejects_non_boolean_video_muting(tmp_path: Path) -> None:
@@ -71,6 +72,16 @@ def test_rejects_non_boolean_web_qr_lossless(tmp_path: Path) -> None:
         config_text().replace("interval = 30", 'interval = 30\nweb_qr_lossless = "yes"')
     )
     with pytest.raises(ConfigError, match="web_qr_lossless must be a boolean"):
+        load_settings(path)
+
+
+@pytest.mark.parametrize("quiet_zone", [-1, 9, 1.5])
+def test_rejects_invalid_web_qr_quiet_zone(tmp_path: Path, quiet_zone: int | float) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        config_text().replace("interval = 30", f"interval = 30\nweb_qr_quiet_zone = {quiet_zone}")
+    )
+    with pytest.raises(ConfigError, match="web_qr_quiet_zone"):
         load_settings(path)
 
 
@@ -219,6 +230,7 @@ def test_editable_settings_round_trip_every_value_and_mask_key(tmp_path: Path) -
         web_qr_inset_y=54,
         web_qr_opacity=60,
         web_qr_lossless=True,
+        web_qr_quiet_zone=0,
     )
     form["service"]["log_level"] = "debug"
 
@@ -238,11 +250,13 @@ def test_editable_settings_round_trip_every_value_and_mask_key(tmp_path: Path) -
     assert reloaded.settings.outputs[0].rotation.web_qr_inset_y == 54
     assert reloaded.settings.outputs[0].rotation.web_qr_opacity == 60
     assert reloaded.settings.outputs[0].rotation.web_qr_lossless is True
+    assert reloaded.settings.outputs[0].rotation.web_qr_quiet_zone == 0
     assert "show_web_qr = true" in path.read_text(encoding="utf-8")
     assert "web_qr_size = 3.5" in path.read_text(encoding="utf-8")
     assert 'web_qr_position = "top-right"' in path.read_text(encoding="utf-8")
     assert "web_qr_opacity = 60" in path.read_text(encoding="utf-8")
     assert "web_qr_lossless = true" in path.read_text(encoding="utf-8")
+    assert "web_qr_quiet_zone = 0" in path.read_text(encoding="utf-8")
     assert "[[outputs]]" in path.read_text(encoding="utf-8")
     assert "[chromecast]" not in path.read_text(encoding="utf-8")
     assert path.stat().st_mode & 0o777 == 0o600

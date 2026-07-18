@@ -564,7 +564,7 @@ function setReceiverOptions(select, selectedUuid) {
 const outputNumberFields = new Set([
   "discovery_timeout", "load_timeout", "interval", "idle_debounce", "cooldown",
   "recent_history", "candidate_batch", "autocast_delay",
-  "video_max_duration", "web_qr_size", "web_qr_inset_x", "web_qr_inset_y", "web_qr_opacity",
+  "video_max_duration", "web_qr_size", "web_qr_inset_x", "web_qr_inset_y", "web_qr_opacity", "web_qr_quiet_zone",
 ]);
 
 function outputField(labelText, field, value, options = {}) {
@@ -643,10 +643,11 @@ function makeOutputSettingsRow(output) {
     outputField("Vertical inset", "web_qr_inset_y", output.web_qr_inset_y, { min: "0", max: "360", step: "1" }),
     outputField("QR surround opacity (%)", "web_qr_opacity", output.web_qr_opacity, { min: "0", max: "100", step: "1" }),
     outputField("Use lossless PNG for QR", "web_qr_lossless", output.web_qr_lossless),
+    outputField("QR quiet zone (modules)", "web_qr_quiet_zone", output.web_qr_quiet_zone, { min: "0", max: "8", step: "1" }),
   );
   const qrHint = document.createElement("p");
   qrHint.className = "field-hint qr-placement-hint";
-  qrHint.textContent = "Lossless PNG sharpens the QR but uses more bandwidth. Save changes to reload the current TV image.";
+  qrHint.textContent = "A quiet zone of 4 is recommended for scanning; 0 removes it. Lossless PNG sharpens the QR but uses more bandwidth.";
   fields.append(qrHint);
   advanced.append(summary, fields);
   row.append(heading, basics, advanced);
@@ -692,6 +693,7 @@ function outputFromTemplate(template, { id, name, uuid }) {
     web_qr_inset_y: template.web_qr_inset_y ?? 36,
     web_qr_opacity: template.web_qr_opacity ?? 75,
     web_qr_lossless: template.web_qr_lossless ?? false,
+    web_qr_quiet_zone: template.web_qr_quiet_zone ?? 4,
   };
 }
 

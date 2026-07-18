@@ -84,6 +84,7 @@ class RotationSettings:
     web_qr_inset_y: int = 36
     web_qr_opacity: int = 75
     web_qr_lossless: bool = False
+    web_qr_quiet_zone: int = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,6 +168,7 @@ def default_form_values() -> dict[str, Any]:
                 "web_qr_inset_y": 36,
                 "web_qr_opacity": 75,
                 "web_qr_lossless": False,
+                "web_qr_quiet_zone": 4,
             }
         ],
         "relay": {
@@ -377,6 +379,13 @@ def _parse_candidate(
             or not 0 <= web_qr_opacity <= 100
         ):
             _fail(f"{section}.web_qr_opacity must be between 0 and 100")
+        web_qr_quiet_zone = output.get("web_qr_quiet_zone", 4)
+        if (
+            isinstance(web_qr_quiet_zone, bool)
+            or not isinstance(web_qr_quiet_zone, int)
+            or not 0 <= web_qr_quiet_zone <= 8
+        ):
+            _fail(f"{section}.web_qr_quiet_zone must be between 0 and 8")
         outputs.append(
             OutputSettings(
                 output_id,
@@ -419,6 +428,7 @@ def _parse_candidate(
                     web_qr_insets[1],
                     web_qr_opacity,
                     _boolean(output.get("web_qr_lossless", False), f"{section}.web_qr_lossless"),
+                    web_qr_quiet_zone,
                 ),
             )
         )
@@ -500,6 +510,7 @@ def _form_values(settings: Settings, path: Path) -> dict[str, Any]:
                 "web_qr_inset_y": output.rotation.web_qr_inset_y,
                 "web_qr_opacity": output.rotation.web_qr_opacity,
                 "web_qr_lossless": output.rotation.web_qr_lossless,
+                "web_qr_quiet_zone": output.rotation.web_qr_quiet_zone,
             }
             for output in settings.outputs
         ],
@@ -591,6 +602,7 @@ def _serialize_configuration(
         "web_qr_inset_y",
         "web_qr_opacity",
         "web_qr_lossless",
+        "web_qr_quiet_zone",
     )
     for output in values["outputs"]:
         lines.append("[[outputs]]")

@@ -91,6 +91,7 @@ class Relay(Protocol):
         web_qr_inset_y: int = 36,
         web_qr_opacity: int = 75,
         web_qr_lossless: bool = False,
+        web_qr_quiet_zone: int = 4,
     ) -> None: ...
 
     async def mint_media(
@@ -104,6 +105,7 @@ class Relay(Protocol):
         web_qr_inset_y: int = 36,
         web_qr_opacity: int = 75,
         web_qr_lossless: bool = False,
+        web_qr_quiet_zone: int = 4,
     ) -> tuple[str, str]: ...
 
     def confirm(self, url: str) -> None: ...
@@ -1018,6 +1020,7 @@ class Coordinator:
                         web_qr_inset_y=self._settings.web_qr_inset_y,
                         web_qr_opacity=self._settings.web_qr_opacity,
                         web_qr_lossless=self._settings.web_qr_lossless,
+                        web_qr_quiet_zone=self._settings.web_qr_quiet_zone,
                     )
                 else:
                     await preload_media(asset)
@@ -1041,6 +1044,7 @@ class Coordinator:
                     web_qr_inset_y=self._settings.web_qr_inset_y,
                     web_qr_opacity=self._settings.web_qr_opacity,
                     web_qr_lossless=self._settings.web_qr_lossless,
+                    web_qr_quiet_zone=self._settings.web_qr_quiet_zone,
                 )
             else:
                 url, content_type = await mint_media(asset)

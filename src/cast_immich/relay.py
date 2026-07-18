@@ -69,9 +69,10 @@ class QrPlacement:
     inset_y: int
     opacity: int
     lossless: bool
+    quiet_zone: int
 
 
-DEFAULT_QR_PLACEMENT = QrPlacement(2, "bottom-left", 36, 36, 75, False)
+DEFAULT_QR_PLACEMENT = QrPlacement(2, "bottom-left", 36, 36, 75, False, 4)
 
 
 class ImageRelay:
@@ -92,7 +93,7 @@ class ImageRelay:
         self._previews: OrderedDict[tuple[UUID, QrPlacement | None], Preview] = OrderedDict()
         self._preview_tasks: dict[tuple[UUID, QrPlacement | None], asyncio.Task[Preview]] = {}
         self._dashboard_url = dashboard_url
-        self._web_qrs: dict[float, Image.Image] = {}
+        self._web_qrs: dict[tuple[float, int], Image.Image] = {}
         self._semaphore = asyncio.Semaphore(settings.max_concurrent)
         self._stream_semaphore = asyncio.Semaphore(settings.max_concurrent)
         self._app = web.Application(client_max_size=1024)
@@ -138,6 +139,7 @@ class ImageRelay:
         web_qr_inset_y: int = 36,
         web_qr_opacity: int = 75,
         web_qr_lossless: bool = False,
+        web_qr_quiet_zone: int = 4,
     ) -> None:
         """Fetch and normalize an image before the receiver needs it."""
         if isinstance(asset, Asset) and asset.media_type is MediaType.VIDEO:
@@ -151,6 +153,7 @@ class ImageRelay:
             web_qr_inset_y=web_qr_inset_y,
             web_qr_opacity=web_qr_opacity,
             web_qr_lossless=web_qr_lossless,
+            web_qr_quiet_zone=web_qr_quiet_zone,
         )
 
     async def preload_media(
@@ -164,6 +167,7 @@ class ImageRelay:
         web_qr_inset_y: int = 36,
         web_qr_opacity: int = 75,
         web_qr_lossless: bool = False,
+        web_qr_quiet_zone: int = 4,
     ) -> None:
         await self.preload(
             asset,
@@ -174,6 +178,7 @@ class ImageRelay:
             web_qr_inset_y=web_qr_inset_y,
             web_qr_opacity=web_qr_opacity,
             web_qr_lossless=web_qr_lossless,
+            web_qr_quiet_zone=web_qr_quiet_zone,
         )
 
     async def mint(
@@ -187,6 +192,7 @@ class ImageRelay:
         web_qr_inset_y: int = 36,
         web_qr_opacity: int = 75,
         web_qr_lossless: bool = False,
+        web_qr_quiet_zone: int = 4,
     ) -> tuple[str, str]:
         if self._closed:
             raise AssetUnavailable("media relay is closed")
@@ -202,6 +208,7 @@ class ImageRelay:
                 web_qr_inset_y=web_qr_inset_y,
                 web_qr_opacity=web_qr_opacity,
                 web_qr_lossless=web_qr_lossless,
+                web_qr_quiet_zone=web_qr_quiet_zone,
             )
             if media.media_type is MediaType.IMAGE
             else None
@@ -231,6 +238,7 @@ class ImageRelay:
         web_qr_inset_y: int = 36,
         web_qr_opacity: int = 75,
         web_qr_lossless: bool = False,
+        web_qr_quiet_zone: int = 4,
     ) -> tuple[str, str]:
         return await self.mint(
             asset,
@@ -241,6 +249,7 @@ class ImageRelay:
             web_qr_inset_y=web_qr_inset_y,
             web_qr_opacity=web_qr_opacity,
             web_qr_lossless=web_qr_lossless,
+            web_qr_quiet_zone=web_qr_quiet_zone,
         )
 
     async def _get_preview(
@@ -254,6 +263,7 @@ class ImageRelay:
         web_qr_inset_y: int = 36,
         web_qr_opacity: int = 75,
         web_qr_lossless: bool = False,
+        web_qr_quiet_zone: int = 4,
     ) -> Preview:
         if self._closed:
             raise AssetUnavailable("image relay is closed")
@@ -265,6 +275,7 @@ class ImageRelay:
                 web_qr_inset_y,
                 web_qr_opacity,
                 web_qr_lossless,
+                web_qr_quiet_zone,
             )
             if show_web_qr
             else None
@@ -313,18 +324,23 @@ class ImageRelay:
                         location = await fetch_location(asset_id)
                     except Exception:
                         logger.warning("asset_location_fetch_failed")
-            qr = self._web_qr(placement.size) if placement is not None else None
+            qr = (
+                self._web_qr(placement.size, placement.quiet_zone)
+                if placement is not None
+                else None
+            )
             return await asyncio.to_thread(
                 _normalize_preview, preview, location, date, qr, placement
             )
 
-    def _web_qr(self, size: float) -> Image.Image | None:
+    def _web_qr(self, size: float, quiet_zone: int) -> Image.Image | None:
         if self._dashboard_url is None:
             return None
-        qr = self._web_qrs.get(size)
+        key = (size, quiet_zone)
+        qr = self._web_qrs.get(key)
         if qr is None:
-            qr = _make_qr(self._dashboard_url, size)
-            self._web_qrs[size] = qr
+            qr = _make_qr(self._dashboard_url, size, quiet_zone)
+            self._web_qrs[key] = qr
         return qr
 
     async def start(self) -> None:
@@ -558,12 +574,12 @@ def _draw_web_qr(
     image.paste(badge, (left, top), badge)
 
 
-def _make_qr(url: str, size: float = 1) -> Image.Image:
+def _make_qr(url: str, size: float = 1, quiet_zone: int = 4) -> Image.Image:
     render_scale = 8
     code = qrcode.QRCode(
         error_correction=qrcode.constants.ERROR_CORRECT_M,
         box_size=render_scale,
-        border=4,
+        border=quiet_zone,
     )
     code.add_data(url)
     code.make(fit=True)

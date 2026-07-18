@@ -82,6 +82,7 @@ The first valid configuration atomically creates `installation-id` beside the co
 - `outputs.web_qr_position`, `outputs.web_qr_inset_x`, and `outputs.web_qr_inset_y`: per-output corner and exact 1280x720 canvas insets.
 - `outputs.web_qr_opacity`: translucent QR surround opacity from 0% through 100%, defaulting to 75%. At 0%, the surround disappears while the QR core remains opaque black-on-white.
 - `outputs.web_qr_lossless`: encode QR-bearing frames as lossless PNG for sharper scanning at the cost of higher bandwidth and memory use. Disabled by default.
+- `outputs.web_qr_quiet_zone`: white border around the QR in module units, from 0 through 8. The QR standard recommends the default of 4; reducing it can make scanning less reliable.
 
 The dashboard validates and atomically rewrites the complete TOML configuration. Concurrent stale saves are rejected. Legacy `[chromecast]` plus `[rotation]` files load as a single `default` output without being rewritten until a save. New saves always use `[[outputs]]`. A blank API-key field preserves the file key. When `CAST_IMMICH_API_KEY` is set, it remains authoritative and browser replacement is disabled.
 

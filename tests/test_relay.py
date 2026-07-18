@@ -67,7 +67,7 @@ def test_web_qr_uses_corner_and_exact_insets() -> None:
     image = Image.new("RGB", (1280, 720), (220, 220, 220))
     original = image.copy()
 
-    _draw_web_qr(image, qr, QrPlacement(2, "top-right", 24, 18, 75, False))
+    _draw_web_qr(image, qr, QrPlacement(2, "top-right", 24, 18, 75, False, 4))
 
     bounds = ImageChops.difference(original, image).getbbox()
     assert bounds is not None
@@ -82,8 +82,8 @@ def test_web_qr_opacity_dims_the_badge() -> None:
     dimmed = original.copy()
     opaque = original.copy()
 
-    _draw_web_qr(dimmed, qr, QrPlacement(1, "bottom-left", 36, 36, 50, False))
-    _draw_web_qr(opaque, qr, QrPlacement(1, "bottom-left", 36, 36, 100, False))
+    _draw_web_qr(dimmed, qr, QrPlacement(1, "bottom-left", 36, 36, 50, False, 4))
+    _draw_web_qr(opaque, qr, QrPlacement(1, "bottom-left", 36, 36, 100, False, 4))
 
     padding = max(2, qr.width // 12)
     top = dimmed.height - qr.height - padding * 2 - 36
@@ -98,7 +98,7 @@ def test_zero_opacity_hides_only_the_qr_surround() -> None:
     original = Image.new("RGB", (1280, 720), (40, 40, 40))
     image = original.copy()
 
-    _draw_web_qr(image, qr, QrPlacement(2, "bottom-left", 36, 36, 0, False))
+    _draw_web_qr(image, qr, QrPlacement(2, "bottom-left", 36, 36, 0, False, 4))
 
     padding = max(2, qr.width // 12)
     top = image.height - qr.height - padding * 2 - 36
@@ -121,6 +121,15 @@ def test_web_qr_supports_crisp_fractional_scaling() -> None:
 
     assert small.width < fractional.width < large.width
     assert set(fractional.get_flattened_data()) == {(0, 0, 0), (255, 255, 255)}
+
+
+def test_web_qr_quiet_zone_can_be_removed() -> None:
+    url = "http://192.168.1.5:8080/"
+    standard = _make_qr(url, 2, 4)
+    borderless = _make_qr(url, 2, 0)
+
+    assert borderless.width == standard.width - 16
+    assert borderless.getpixel((0, 0)) == (0, 0, 0)
 
 
 @pytest.mark.asyncio

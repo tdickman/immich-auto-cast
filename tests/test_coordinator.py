@@ -179,6 +179,7 @@ async def test_qr_placement_is_forwarded_to_media_relay() -> None:
         web_qr_inset_y=54,
         web_qr_opacity=60,
         web_qr_lossless=True,
+        web_qr_quiet_zone=0,
     )
     coordinator = Coordinator(
         asyncio.Queue(), Selector(), PlacementRelay(), Cast(), settings, INSTALLATION_ID, 15
@@ -194,6 +195,7 @@ async def test_qr_placement_is_forwarded_to_media_relay() -> None:
         "web_qr_inset_y": 54,
         "web_qr_opacity": 60,
         "web_qr_lossless": True,
+        "web_qr_quiet_zone": 0,
     }
 
 
