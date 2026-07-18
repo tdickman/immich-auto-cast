@@ -101,7 +101,7 @@ class HistoryStore:
     MAX_RECORDS = 10
     MAX_RECENT_ASSETS = 1000
     VERSION = 3
-    SOURCE_KINDS = frozenset({"timeline", "album", "person", "search", "event", "filter"})
+    SOURCE_KINDS = frozenset({"timeline", "album", "person", "search", "event", "filter", "video"})
     EVENT_COLLECTIONS = frozenset(
         {"on_this_day", "recent_favorites", "last_month", "seasonal", "recent_person_recap"}
     )

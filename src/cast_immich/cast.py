@@ -166,6 +166,7 @@ class CastAdapter:
         self._reconnect_event = asyncio.Event()
         self._reconnect_serial = 0
         self._dispose_lock = asyncio.Lock()
+        self._original_volume_muted: bool | None = None
 
     @property
     def generation(self) -> int:
@@ -216,9 +217,33 @@ class CastAdapter:
         content_type: str,
         custom_data: dict[str, str],
     ) -> bool:
+        return await self.load_media(
+            generation,
+            url,
+            content_type,
+            custom_data,
+            is_video=False,
+            duration=None,
+            muted=False,
+        )
+
+    async def load_media(
+        self,
+        generation: int,
+        url: str,
+        content_type: str,
+        custom_data: dict[str, str],
+        *,
+        is_video: bool,
+        duration: float | None,
+        muted: bool,
+    ) -> bool:
         if generation != self._generation or self._cast is None or self._stopping:
             return False
         cast = self._cast
+        await self._set_video_mute(cast, muted if is_video else False)
+        if generation != self._generation or cast is not self._cast or self._stopping:
+            return False
         loop = asyncio.get_running_loop()
         response: asyncio.Future[tuple[bool, dict[str, Any] | None]] = loop.create_future()
 
@@ -230,12 +255,15 @@ class CastAdapter:
             loop.call_soon_threadsafe(resolve)
 
         def load() -> None:
+            media_info: dict[str, Any] = {"customData": custom_data}
+            if duration is not None:
+                media_info["duration"] = duration
             cast.media_controller.play_media(
                 url,
                 content_type,
-                stream_type="LIVE",
-                title="Immich photo",
-                media_info={"customData": custom_data},
+                stream_type="BUFFERED" if is_video else "LIVE",
+                title="Immich video" if is_video else "Immich photo",
+                media_info=media_info,
                 callback_function=loaded,
             )
 
@@ -244,10 +272,29 @@ class CastAdapter:
             sent, data = await asyncio.wait_for(response, self._settings.load_timeout)
         except TimeoutError:
             logger.warning("cast_load_response", extra={"reason": "timeout"})
+            if is_video:
+                await self.release_audio(generation)
             return False
         reason = data.get("type", "unknown") if isinstance(data, dict) else "no_response"
         logger.info("cast_load_response", extra={"reason": reason})
-        return sent and generation == self._generation and not self._stopping
+        accepted = sent and generation == self._generation and not self._stopping
+        if is_video and not accepted:
+            await self.release_audio(generation)
+        return accepted
+
+    async def _set_video_mute(self, cast: Any, muted: bool) -> None:
+        if muted:
+            if self._original_volume_muted is None:
+                self._original_volume_muted = bool(getattr(cast.status, "volume_muted", False))
+            await asyncio.to_thread(cast.set_volume_muted, True)
+        elif self._original_volume_muted is not None:
+            original, self._original_volume_muted = self._original_volume_muted, None
+            await asyncio.to_thread(cast.set_volume_muted, original)
+
+    async def release_audio(self, generation: int) -> None:
+        if generation != self._generation or self._cast is None:
+            return
+        await self._set_video_mute(self._cast, False)
 
     async def refresh_status(self, generation: int) -> None:
         if generation != self._generation or self._cast is None or self._stopping:
@@ -286,6 +333,7 @@ class CastAdapter:
             pass
         if generation != self._generation or cast is not self._cast or self._stopping:
             return False
+        await self.release_audio(generation)
         await asyncio.to_thread(cast.quit_app)
         return generation == self._generation and cast is self._cast and not self._stopping
 
@@ -376,6 +424,9 @@ class CastAdapter:
 
     async def _dispose_async(self, extra_casts: list[Any] | None = None) -> None:
         async with self._dispose_lock:
+            if self._cast is not None and self._original_volume_muted is not None:
+                with contextlib.suppress(Exception):
+                    await self._set_video_mute(self._cast, False)
             await asyncio.to_thread(self._dispose)
             if extra_casts is not None:
                 for cast in extra_casts:

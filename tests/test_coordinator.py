@@ -16,6 +16,7 @@ from cast_immich.history import DisplayRecord, HistoryState
 from cast_immich.immich import (
     Asset,
     AssetUnavailable,
+    MediaType,
     PermanentImmichError,
     PhotoSource,
     SourceKind,
@@ -241,6 +242,67 @@ async def test_stable_idle_sends_exactly_one_load_and_confirms_ownership() -> No
     assert coordinator.snapshot.rotation_deadline is not None
     assert 0 < coordinator.snapshot.rotation_deadline - time.monotonic() <= 0.02
     assert len(cast.loads) == 1
+    await coordinator.close()
+
+
+@pytest.mark.asyncio
+async def test_video_uses_media_load_and_duration_based_rotation() -> None:
+    video = Asset(ASSET_ID, media_type=MediaType.VIDEO, duration=0.05)
+
+    class VideoSelector(Selector):
+        async def select_assets_for(
+            self, recent: set[UUID], batch_size: int, count: int, source: PhotoSource
+        ) -> tuple[Asset, ...]:
+            assert source.kind is SourceKind.VIDEO
+            assert source.max_video_duration == 0.1
+            return (video,)
+
+    class VideoRelay(Relay):
+        async def mint_media(self, asset: Asset) -> tuple[str, str]:
+            assert asset is video
+            return "http://192.168.1.5:8787/video/opaque", "video/mp4"
+
+    class VideoCast(Cast):
+        def __init__(self) -> None:
+            super().__init__()
+            self.media_load: tuple[bool, float | None, bool] | None = None
+
+        async def load_media(
+            self,
+            generation: int,
+            url: str,
+            content_type: str,
+            custom_data: dict[str, str],
+            *,
+            is_video: bool,
+            duration: float | None,
+            muted: bool,
+        ) -> bool:
+            self.loads.append((generation, url, content_type, custom_data))
+            self.media_load = (is_video, duration, muted)
+            return True
+
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    cast = VideoCast()
+    coordinator = Coordinator(
+        queue,
+        VideoSelector(),
+        VideoRelay(),
+        cast,
+        RotationSettings(0.01, 0.01, 0.02, 5, 10, video_max_duration=0.1),
+        INSTALLATION_ID,
+        0.02,
+    )
+    coordinator._source = PhotoSource(SourceKind.VIDEO, max_video_duration=0.1)
+
+    await drive_idle_to_load(coordinator, queue)
+    _url, metadata = await confirm_load(coordinator, cast)
+
+    assert cast.media_load == (True, 0.05, True)
+    assert metadata["mediaType"] == "video"
+    assert metadata["duration"] == "0.05"
+    assert coordinator.snapshot.rotation_deadline is not None
+    assert coordinator.snapshot.rotation_deadline - time.monotonic() > 0.9
     await coordinator.close()
 
 

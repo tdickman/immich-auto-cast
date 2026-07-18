@@ -74,6 +74,8 @@ class RotationSettings:
     recent_history: int
     candidate_batch: int
     autocast_delay: float = 30.0
+    video_max_duration: float = 30.0
+    video_muted: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +150,8 @@ def default_form_values() -> dict[str, Any]:
                 "recent_history": 25,
                 "candidate_batch": 50,
                 "autocast_delay": 30,
+                "video_max_duration": 30,
+                "video_muted": True,
             }
         ],
         "relay": {
@@ -185,6 +189,12 @@ def _positive(value: Any, name: str, *, integer: bool = False) -> float | int:
     if isinstance(value, bool) or not isinstance(value, expected) or value <= 0:
         _fail(f"{name} must be positive")
     return value if integer else float(value)
+
+
+def _boolean(value: Any, name: str) -> bool:
+    if not isinstance(value, bool):
+        _fail(f"{name} must be a boolean")
+    return value
 
 
 def _revision(value: Any) -> int:
@@ -361,6 +371,13 @@ def _parse_candidate(
                         )
                     ),
                     float(_positive(output.get("autocast_delay", 30), f"{section}.autocast_delay")),
+                    float(
+                        _positive(
+                            output.get("video_max_duration", 30),
+                            f"{section}.video_max_duration",
+                        )
+                    ),
+                    _boolean(output.get("video_muted", True), f"{section}.video_muted"),
                 ),
             )
         )
@@ -433,6 +450,8 @@ def _form_values(settings: Settings, path: Path) -> dict[str, Any]:
                 "recent_history": output.rotation.recent_history,
                 "candidate_batch": output.rotation.candidate_batch,
                 "autocast_delay": output.rotation.autocast_delay,
+                "video_max_duration": output.rotation.video_max_duration,
+                "video_muted": output.rotation.video_muted,
             }
             for output in settings.outputs
         ],
@@ -515,6 +534,8 @@ def _serialize_configuration(
         "cooldown",
         "recent_history",
         "candidate_batch",
+        "video_max_duration",
+        "video_muted",
     )
     for output in values["outputs"]:
         lines.append("[[outputs]]")

@@ -76,6 +76,8 @@ The first valid configuration atomically creates `installation-id` beside the co
 - `outputs.autocast_delay`: idle time before automatic casting, 30 seconds by default. The initial startup cast has no delay.
 - `outputs.idle_debounce`: short status-stabilization setting retained for configuration compatibility.
 - `outputs.load_timeout`: time allowed for media status to confirm a load.
+- `outputs.video_max_duration`: maximum intrinsic duration of an eligible video, 30 seconds by default.
+- `outputs.video_muted`: mute the receiver while service-owned videos play and restore its prior mute state afterward.
 
 The dashboard validates and atomically rewrites the complete TOML configuration. Concurrent stale saves are rejected. Legacy `[chromecast]` plus `[rotation]` files load as a single `default` output without being rewritten until a save. New saves always use `[[outputs]]`. A blank API-key field preserves the file key. When `CAST_IMMICH_API_KEY` is set, it remains authoritative and browser replacement is disabled.
 
@@ -85,7 +87,7 @@ Changing the Immich server origin requires entering a replacement API key in the
 
 The dashboard uses same-origin JSON endpoints under `/api`. Status, config, discovery, albums, and people are shared. Output operations are scoped under `/api/outputs/{output_id}` for source, seek, reconnect, controls, history, and current/upcoming/history thumbnails. Mutation clients must first read the CSRF token from status/config, then send the exact page `Origin`, `Content-Type: application/json`, `X-Cast-Immich-Request: 1`, and `X-CSRF-Token`. Configuration writes include the current revision; controls include a stable request ID for idempotency. Command responses echo the request ID, command, outcome, and resulting sanitized status.
 
-The selected source can be the normal timeline, an album, a detected person, an Immich AI search term, an event collection, or a date/location filter. Event collections include photos from this day in prior years, favorites from the last 90 days, the previous calendar month, the current season in prior years, and photos of a selected person from the last 365 days. Date bounds are inclusive; city, state/region, and country filters use Immich's metadata fields. Trashed, offline, video, and audio assets are always excluded; timeline mode also excludes archived, hidden, locked, and shared-album-only assets. The relayed image includes its capture date beneath the location when Immich provides that metadata.
+The selected source can be the normal timeline, short videos only, an album, a detected person, an Immich AI search term, an event collection, or a date/location filter. Event collections include photos from this day in prior years, favorites from the last 90 days, the previous calendar month, the current season in prior years, and photos of a selected person from the last 365 days. Date bounds are inclusive; city, state/region, and country filters use Immich's metadata fields. Photo sources remain image-only. The video source accepts only timeline videos with a known positive duration no greater than the output's configured limit. Trashed, archived, offline, and audio assets are excluded. Images are normalized before relay; videos use Immich's MP4 playback stream with single-range requests forwarded to support Chromecast seeking and buffering.
 
 Eligible random-search results are retained per source and consumed before Immich is queried again. The pool refills at a low-water mark so the 10-photo queue stays populated without running PostgreSQL's random ordering for every rotation. `On this day` cycles through the matching photos already found after every unique photo has been shown; unavailable assets are removed from that cycle.
 
@@ -93,7 +95,7 @@ Eligible random-search results are retained per source and consumed before Immic
 
 Chromecast discovery uses multicast DNS on UDP 5353. The host also needs outbound Cast connectivity to the device (normally TCP 8009), outbound HTTP(S) to Immich, and the Chromecast needs inbound TCP access to the configured relay port (8787 in the example). Put both devices on the same subnet where possible and disable Wi-Fi client isolation. Permit the relay port from the Chromecast network and, only for trusted clients, the management port (8080 by default) through the host firewall. No inbound management rule is needed while it remains bound to `127.0.0.1`.
 
-The receiver fetches each photo itself. `127.0.0.1`, an isolated container address, or a hostname unavailable to the Chromecast will not work. Host deployment is recommended. If containerizing later, use host networking so mDNS discovery and the advertised relay address remain valid.
+The receiver fetches each media item itself. `127.0.0.1`, an isolated container address, or a hostname unavailable to the Chromecast will not work. Host deployment is recommended. If containerizing later, use host networking so mDNS discovery and the advertised relay address remain valid.
 
 ## Safety Model
 

@@ -54,11 +54,18 @@ class AssetUnavailable(ImmichError):
         super().__init__(message, ImmichFailureKind.ASSET_UNAVAILABLE)
 
 
+class MediaType(StrEnum):
+    IMAGE = "image"
+    VIDEO = "video"
+
+
 @dataclass(frozen=True, slots=True)
 class Asset:
     id: UUID
     location: str | None = None
     date: str | None = None
+    media_type: MediaType = MediaType.IMAGE
+    duration: float | None = None
 
 
 class SourceKind(StrEnum):
@@ -68,6 +75,7 @@ class SourceKind(StrEnum):
     SEARCH = "search"
     EVENT = "event"
     FILTER = "filter"
+    VIDEO = "video"
 
 
 class EventCollection(StrEnum):
@@ -89,6 +97,7 @@ class PhotoSource:
     city: str | None = None
     state: str | None = None
     country: str | None = None
+    max_video_duration: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,14 +182,15 @@ class ImmichClient:
         count: int,
         source: PhotoSource,
     ) -> tuple[Asset, ...]:
+        video_only = source.kind is SourceKind.VIDEO
         payload: dict[str, Any] = {
-            "type": "IMAGE",
+            "type": "VIDEO" if video_only else "IMAGE",
             "withDeleted": False,
             "isOffline": False,
             "withExif": True,
             "size": min(max(batch_size, count, 1), 1000),
         }
-        if source.kind is SourceKind.TIMELINE:
+        if source.kind in {SourceKind.TIMELINE, SourceKind.VIDEO}:
             payload["visibility"] = "timeline"
         elif source.kind is SourceKind.ALBUM and source.id is not None:
             payload["albumIds"] = [str(source.id)]
@@ -194,14 +204,14 @@ class ImmichClient:
         elif source.kind is SourceKind.FILTER:
             self._apply_custom_filter(payload, source)
         else:
-            raise ValueError("invalid photo source")
+            raise ValueError("invalid media source")
         path = "/api/search/smart" if source.kind is SourceKind.SEARCH else "/api/search/random"
         if path == "/api/search/random":
             return await self._select_from_random_pool(recent, batch_size, count, source, payload)
         candidates = await self._request_candidates(path, payload, source)
         selected = [asset for asset in candidates if asset.id not in recent]
         if not selected:
-            raise AssetUnavailable("Immich returned no eligible new images")
+            raise AssetUnavailable("Immich returned no eligible new media")
         random.SystemRandom().shuffle(selected)
         return tuple(selected[:count])
 
@@ -242,7 +252,7 @@ class ImmichClient:
                 while cycle and len(selected) < count:
                     selected.extend(cycle[: count - len(selected)])
             if not selected:
-                raise AssetUnavailable("Immich returned no eligible new images")
+                raise AssetUnavailable("Immich returned no eligible new media")
             return tuple(selected[:count])
 
     async def _refill_random_pool(
@@ -287,7 +297,10 @@ class ImmichClient:
             if not self._matches_event(item, source):
                 continue
             asset = self._parse_eligible_asset(
-                item, require_timeline=source.kind is SourceKind.TIMELINE
+                item,
+                require_timeline=source.kind in {SourceKind.TIMELINE, SourceKind.VIDEO},
+                media_type=MediaType.VIDEO if source.kind is SourceKind.VIDEO else MediaType.IMAGE,
+                max_video_duration=source.max_video_duration,
             )
             if asset is not None:
                 candidates[asset.id] = asset
@@ -486,6 +499,31 @@ class ImmichClient:
                 raise AssetUnavailable("asset preview is empty")
             return Preview(bytes(body), content_type)
 
+    async def open_video(
+        self, asset_id: UUID, method: str, range_header: str | None
+    ) -> aiohttp.ClientResponse:
+        headers = {"Range": range_header} if range_header is not None else None
+        response = await self._request(
+            method,
+            f"/api/assets/{asset_id}/video/playback",
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(
+                total=None,
+                sock_connect=self._settings.request_timeout,
+                sock_read=self._settings.request_timeout,
+            ),
+        )
+        if response.status == 404:
+            response.release()
+            raise AssetUnavailable("asset video is no longer available")
+        if response.status not in {200, 206, 416}:
+            try:
+                self._raise_for_status(response.status)
+            except Exception:
+                response.release()
+                raise
+        return response
+
     async def _json_request(self, method: str, path: str, **kwargs: Any) -> Any:
         response = await self._request(method, path, **kwargs)
         async with response:
@@ -554,25 +592,59 @@ class ImmichClient:
             raise TransientImmichError(f"Immich request failed ({status})")
 
     @staticmethod
-    def _parse_eligible_asset(value: object, *, require_timeline: bool = True) -> Asset | None:
+    def _parse_eligible_asset(
+        value: object,
+        *,
+        require_timeline: bool = True,
+        media_type: MediaType = MediaType.IMAGE,
+        max_video_duration: float | None = None,
+    ) -> Asset | None:
         if not isinstance(value, dict):
             return None
         if (
-            value.get("type") != "IMAGE"
+            value.get("type") != media_type.value.upper()
             or (require_timeline and value.get("visibility") != "timeline")
             or value.get("isArchived") is not False
             or value.get("isTrashed") is not False
             or value.get("isOffline") is not False
         ):
             return None
+        duration: float | None = None
+        if media_type is MediaType.VIDEO:
+            duration = ImmichClient._parse_duration(value.get("duration"))
+            if duration is None or max_video_duration is None or duration > max_video_duration:
+                return None
         try:
             return Asset(
                 UUID(str(value["id"])),
                 ImmichClient._parse_location(value),
                 ImmichClient._parse_date(value),
+                media_type,
+                duration,
             )
         except (KeyError, ValueError):
             return None
+
+    @staticmethod
+    def _parse_duration(value: object) -> float | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int | float):
+            return float(value) if value > 0 else None
+        if not isinstance(value, str) or not value.strip():
+            return None
+        text = value.strip()
+        try:
+            if ":" not in text:
+                parsed = float(text)
+            else:
+                parts = [float(part) for part in text.split(":")]
+                if len(parts) not in {2, 3}:
+                    return None
+                parsed = sum(part * (60**index) for index, part in enumerate(reversed(parts)))
+        except ValueError:
+            return None
+        return parsed if parsed > 0 else None
 
     @staticmethod
     def _parse_location(value: object) -> str | None:

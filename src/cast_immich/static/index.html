@@ -46,9 +46,10 @@
               <span>Autocast in 30s</span>
             </div>
             <div class="source-control">
-              <label>Photo source
+              <label>Media source
                 <select id="source-kind">
                   <option value="timeline">Any photo from the timeline</option>
+                  <option value="video">Videos only</option>
                   <option value="album">Album</option>
                   <option value="person">Person</option>
                   <option value="search">AI search</option>
@@ -87,7 +88,7 @@
               <span class="button-mark">Ⅱ</span><span>Pause rotation</span>
             </button>
             <button class="control-button" id="next-button" type="button">
-              <span class="button-mark">→</span><span>Next photo</span>
+              <span class="button-mark">→</span><span>Next item</span>
             </button>
             <button class="control-button" id="autocast-toggle" type="button">
               <span class="button-mark">A</span><span>Disable autocast</span>
@@ -99,11 +100,11 @@
         </div>
       </section>
 
-      <section class="playback-gallery" aria-label="Photo playback">
+      <section class="playback-gallery" aria-label="Media playback">
         <div class="now-panel" aria-labelledby="current-title">
           <h2 id="current-title">Now showing</h2>
           <div class="now-content" id="current-list" aria-live="polite">
-            <p class="empty-state">No photo is currently casting.</p>
+            <p class="empty-state">No media is currently casting.</p>
           </div>
           <div class="next-photo-countdown" id="next-photo-countdown" role="timer" aria-label="Next photo countdown" hidden>
             <span aria-hidden="true"></span>
@@ -116,9 +117,9 @@
             </div>
             <span class="history-count" id="upcoming-count">0</span>
           </div>
-          <p class="section-note">Open a photo in Immich, or use its corner control to play from there.</p>
+          <p class="section-note">Open an item in Immich, or use its corner control to play from there.</p>
           <div class="contact-sheet" id="upcoming-list" aria-live="polite">
-            <p class="empty-state">Photos appear here when casting starts.</p>
+            <p class="empty-state">Media appears here when casting starts.</p>
           </div>
         </div>
         <div class="gallery-panel history-panel" aria-labelledby="history-title">
@@ -128,9 +129,9 @@
             </div>
             <span class="history-count" id="history-count">0</span>
           </div>
-          <p class="section-note">Open a photo in Immich, or use its corner control to play from there.</p>
+          <p class="section-note">Open an item in Immich, or use its corner control to play from there.</p>
           <div class="contact-sheet" id="history-list" aria-live="polite">
-            <p class="empty-state">No photos shown yet.</p>
+            <p class="empty-state">No media shown yet.</p>
           </div>
         </div>
       </section>
@@ -150,8 +151,8 @@
             <div class="permission-hint" id="api-key-permissions">
               <p>When creating the key in Immich, select these permissions:</p>
               <ul>
-                <li><code>asset.read</code><span>Find photos and read metadata</span></li>
-                <li><code>asset.view</code><span>Load photo previews</span></li>
+                <li><code>asset.read</code><span>Find media and read metadata</span></li>
+                <li><code>asset.view</code><span>Load previews and videos</span></li>
                 <li><code>album.read</code><span>Use albums as a source</span></li>
                 <li><code>person.read</code><span>Use people as a source</span></li>
               </ul>
@@ -185,7 +186,7 @@
               </div>
             </fieldset>
             <fieldset>
-            <legend>Image relay</legend>
+            <legend>Media relay</legend>
             <div class="field-pair">
               <label>Bind host<input name="relay.bind_host" required></label>
               <label>Port<input name="relay.port" type="number" min="1" max="65535" step="1" required></label>

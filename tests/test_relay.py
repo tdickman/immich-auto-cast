@@ -7,10 +7,11 @@ from uuid import UUID
 
 import aiohttp
 import pytest
+from aiohttp import web
 from PIL import Image, ImageChops
 
-from cast_immich.config import RelaySettings
-from cast_immich.immich import Preview
+from cast_immich.config import ImmichSettings, RelaySettings
+from cast_immich.immich import Asset, ImmichClient, MediaType, Preview
 from cast_immich.relay import ImageRelay, _draw_metadata
 
 ASSET_ID = UUID("12345678-1234-4234-8234-123456789abc")
@@ -68,6 +69,56 @@ async def test_valid_capability_supports_repeated_get_and_head(serve_app: Any) -
         assert head.headers["Access-Control-Allow-Origin"] == "*"
     assert content_type == "image/jpeg"
     assert source.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_video_capability_streams_single_ranges_from_immich(serve_app: Any) -> None:
+    body = b"0123456789"
+    observed: list[tuple[str, str | None]] = []
+
+    async def video(request: Any) -> Any:
+        range_header = request.headers.get("Range")
+        observed.append((request.method, range_header))
+        if range_header == "bytes=2-5":
+            return web.Response(
+                status=206,
+                body=body[2:6],
+                headers={
+                    "Content-Type": "video/mp4",
+                    "Content-Range": "bytes 2-5/10",
+                    "Accept-Ranges": "bytes",
+                },
+            )
+        return web.Response(
+            body=body,
+            headers={"Content-Type": "video/mp4", "Accept-Ranges": "bytes"},
+        )
+
+    upstream_app = web.Application()
+    upstream_app.router.add_route("*", "/api/assets/{asset_id}/video/playback", video)
+    upstream = await serve_app(upstream_app)
+    immich_settings = ImmichSettings(str(upstream.make_url("/")).rstrip("/"), "secret", 2, 1)
+    async with ImmichClient(immich_settings) as client:
+        relay = ImageRelay(settings(), client)
+        public_url, content_type = await relay.mint(
+            Asset(ASSET_ID, media_type=MediaType.VIDEO, duration=10)
+        )
+        token = public_url.rsplit("/", 1)[1]
+        server = await serve_app(relay.app)
+        async with aiohttp.ClientSession() as session:
+            response = await session.get(
+                server.make_url(f"/video/{token}"), headers={"Range": "bytes=2-5"}
+            )
+            assert response.status == 206
+            assert response.headers["Content-Range"] == "bytes 2-5/10"
+            assert await response.read() == b"2345"
+            invalid = await session.get(
+                server.make_url(f"/video/{token}"), headers={"Range": "bytes=0-1,4-5"}
+            )
+            assert invalid.status == 416
+
+    assert content_type == "video/mp4"
+    assert observed == [("GET", "bytes=2-5")]
 
 
 @pytest.mark.asyncio

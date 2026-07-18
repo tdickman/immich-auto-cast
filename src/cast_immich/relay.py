@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import re
 import secrets
 import time
 from collections import OrderedDict
@@ -11,11 +12,12 @@ from dataclasses import dataclass, replace
 from typing import Protocol
 from uuid import UUID
 
+import aiohttp
 from aiohttp import web
 from PIL import Image, ImageDraw, ImageFont, ImageOps, UnidentifiedImageError
 
 from .config import RelaySettings
-from .immich import AssetUnavailable, Preview
+from .immich import Asset, AssetUnavailable, MediaType, Preview
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +28,7 @@ ALLOWED_IMAGE_TYPES = {
     "image/png",
     "image/webp",
 }
+ALLOWED_VIDEO_TYPES = {"video/mp4"}
 SAFE_HEADERS = {
     "Access-Control-Allow-Origin": "*",
     "Cache-Control": "private, max-age=60",
@@ -43,12 +46,17 @@ class PreviewSource(Protocol):
 
     async def fetch_metadata(self, asset_id: UUID) -> tuple[str | None, str | None]: ...
 
+    async def open_video(
+        self, asset_id: UUID, method: str, range_header: str | None
+    ) -> aiohttp.ClientResponse: ...
+
 
 @dataclass(frozen=True, slots=True)
 class Capability:
     asset_id: UUID
     expires_at: float
-    preview: Preview
+    preview: Preview | None
+    media_type: MediaType = MediaType.IMAGE
     pinned: bool = False
 
 
@@ -69,8 +77,10 @@ class ImageRelay:
         self._previews: OrderedDict[UUID, Preview] = OrderedDict()
         self._preview_tasks: dict[UUID, asyncio.Task[Preview]] = {}
         self._semaphore = asyncio.Semaphore(settings.max_concurrent)
+        self._stream_semaphore = asyncio.Semaphore(settings.max_concurrent)
         self._app = web.Application(client_max_size=1024)
         self._app.router.add_route("*", "/image/{token}", self._handle)
+        self._app.router.add_route("*", "/video/{token}", self._handle)
         self._runner: web.AppRunner | None = None
         self._closed = False
         self._active_mints: set[asyncio.Task[object]] = set()
@@ -100,23 +110,37 @@ class ImageRelay:
             self._tokens[token] = replace(capability, pinned=False)
         self._purge()
 
-    async def preload(self, asset_id: UUID) -> None:
+    async def preload(self, asset: Asset | UUID) -> None:
         """Fetch and normalize an image before the receiver needs it."""
-        await self._get_preview(asset_id)
+        if isinstance(asset, Asset) and asset.media_type is MediaType.VIDEO:
+            return
+        await self._get_preview(asset.id if isinstance(asset, Asset) else asset)
 
-    async def mint(self, asset_id: UUID) -> tuple[str, str]:
+    async def preload_media(self, asset: Asset) -> None:
+        await self.preload(asset)
+
+    async def mint(self, asset: Asset | UUID) -> tuple[str, str]:
         if self._closed:
-            raise AssetUnavailable("image relay is closed")
+            raise AssetUnavailable("media relay is closed")
         self._purge()
-        preview = await self._get_preview(asset_id)
+        media = asset if isinstance(asset, Asset) else Asset(asset)
+        preview = await self._get_preview(media.id) if media.media_type is MediaType.IMAGE else None
         if self._closed:
-            raise AssetUnavailable("image relay is closed")
+            raise AssetUnavailable("media relay is closed")
         token = secrets.token_urlsafe(24)
         self._tokens[token] = Capability(
-            asset_id, self._clock() + self._settings.token_lifetime, preview
+            media.id,
+            self._clock() + self._settings.token_lifetime,
+            preview,
+            media.media_type,
         )
         self._trim_tokens()
-        return f"{self._settings.advertised_base_url}/image/{token}", preview.content_type
+        path = "video" if media.media_type is MediaType.VIDEO else "image"
+        content_type = "video/mp4" if preview is None else preview.content_type
+        return f"{self._settings.advertised_base_url}/{path}/{token}", content_type
+
+    async def mint_media(self, asset: Asset) -> tuple[str, str]:
+        return await self.mint(asset)
 
     async def _get_preview(self, asset_id: UUID) -> Preview:
         if self._closed:
@@ -191,19 +215,61 @@ class ImageRelay:
         self._previews.clear()
         self._preview_tasks.clear()
 
-    async def _handle(self, request: web.Request) -> web.Response:
-        logger.info("image_requested")
+    async def _handle(self, request: web.Request) -> web.StreamResponse:
+        logger.info("media_requested")
         if request.method not in {"GET", "HEAD"}:
             return web.Response(status=405, headers={"Allow": "GET, HEAD", **SAFE_HEADERS})
         capability = self._tokens.get(request.match_info["token"])
         if capability is None or (not capability.pinned and capability.expires_at <= self._clock()):
             return web.Response(status=404, headers=SAFE_HEADERS)
+        if capability.media_type is MediaType.VIDEO:
+            async with self._stream_semaphore:
+                return await self._handle_video(request, capability)
         preview = capability.preview
-        if preview.content_type not in ALLOWED_IMAGE_TYPES:
+        if preview is None or preview.content_type not in ALLOWED_IMAGE_TYPES:
             return web.Response(status=502, headers=SAFE_HEADERS)
         headers = {"Content-Type": preview.content_type, "Content-Length": str(len(preview.body))}
         headers.update(SAFE_HEADERS)
         return web.Response(body=b"" if request.method == "HEAD" else preview.body, headers=headers)
+
+    async def _handle_video(
+        self, request: web.Request, capability: Capability
+    ) -> web.StreamResponse:
+        range_header = request.headers.get("Range")
+        if (
+            range_header is not None
+            and re.fullmatch(r"bytes=(?:\d+-\d*|-\d+)", range_header) is None
+        ):
+            return web.Response(status=416, headers=SAFE_HEADERS)
+        try:
+            upstream = await self._source.open_video(
+                capability.asset_id, request.method, range_header
+            )
+        except AssetUnavailable:
+            return web.Response(status=404, headers=SAFE_HEADERS)
+        except Exception:
+            logger.warning("video_stream_open_failed")
+            return web.Response(status=502, headers=SAFE_HEADERS)
+        async with upstream:
+            content_type = upstream.headers.get("Content-Type", "").split(";", 1)[0].lower()
+            if upstream.status != 416 and content_type not in ALLOWED_VIDEO_TYPES:
+                return web.Response(status=502, headers=SAFE_HEADERS)
+            headers = dict(SAFE_HEADERS)
+            for name in ("Content-Type", "Content-Length", "Content-Range", "Accept-Ranges"):
+                value = upstream.headers.get(name)
+                if value is not None:
+                    headers[name] = value
+            headers.setdefault("Accept-Ranges", "bytes")
+            if upstream.status == 416 or request.method == "HEAD":
+                return web.Response(status=upstream.status, headers=headers)
+            response = web.StreamResponse(status=upstream.status, headers=headers)
+            await response.prepare(request)
+            try:
+                async for chunk in upstream.content.iter_chunked(64 * 1024):
+                    await response.write(chunk)
+            except (aiohttp.ClientError, ConnectionError, TimeoutError):
+                logger.info("video_stream_interrupted")
+            return response
 
     def _purge(self) -> None:
         now = self._clock()
@@ -226,8 +292,11 @@ class ImageRelay:
             self._tokens.pop(removable)
 
     def _token_from_url(self, url: str) -> str:
-        prefix = f"{self._settings.advertised_base_url}/image/"
-        return url.removeprefix(prefix) if url.startswith(prefix) else ""
+        for path in ("image", "video"):
+            prefix = f"{self._settings.advertised_base_url}/{path}/"
+            if url.startswith(prefix):
+                return url.removeprefix(prefix)
+        return ""
 
 
 def _normalize_preview(

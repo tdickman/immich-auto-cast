@@ -11,10 +11,12 @@ from aiohttp import web
 
 from cast_immich.config import ImmichSettings
 from cast_immich.immich import (
+    Asset,
     AssetUnavailable,
     EventCollection,
     ImmichClient,
     ImmichFailureKind,
+    MediaType,
     PermanentImmichError,
     PhotoSource,
     SourceKind,
@@ -34,6 +36,34 @@ def eligible(asset_id: UUID = ASSET_ID, **overrides: Any) -> dict[str, Any]:
     }
     value.update(overrides)
     return value
+
+
+@pytest.mark.asyncio
+async def test_video_source_requires_known_bounded_duration(serve_app: Any) -> None:
+    observed: dict[str, Any] = {}
+
+    async def search(request: web.Request) -> web.Response:
+        observed.update(await request.json())
+        return web.json_response(
+            [
+                eligible(type="VIDEO", duration="00:00:31"),
+                eligible(UUID(int=2), type="VIDEO", duration="00:00:12.5"),
+                eligible(UUID(int=3), type="VIDEO", duration=None),
+            ]
+        )
+
+    app = web.Application()
+    app.router.add_post("/api/search/random", search)
+    server = await serve_app(app)
+    settings = ImmichSettings(str(server.make_url("/")).rstrip("/"), "secret", 2, 1)
+    async with ImmichClient(settings) as client:
+        assets = await client.select_assets_for(
+            set(), 10, 10, PhotoSource(SourceKind.VIDEO, max_video_duration=30)
+        )
+
+    assert observed["type"] == "VIDEO"
+    assert observed["visibility"] == "timeline"
+    assert assets == (Asset(UUID(int=2), media_type=MediaType.VIDEO, duration=12.5),)
 
 
 @pytest.mark.asyncio

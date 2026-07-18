@@ -16,6 +16,8 @@ autocast_delay = 30.0
 cooldown = 15.0
 recent_history = 25
 candidate_batch = 50
+video_max_duration = 30.0
+video_muted = true
 
 [relay]
 bind_host = "0.0.0.0"

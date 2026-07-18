@@ -4,7 +4,7 @@ import asyncio
 import logging
 import time
 from collections import OrderedDict, deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from enum import StrEnum
 from typing import Protocol
@@ -26,6 +26,7 @@ from .immich import (
     EventCollection,
     ImmichError,
     ImmichFailureKind,
+    MediaType,
     PhotoSource,
     SourceKind,
 )
@@ -79,6 +80,10 @@ class Relay(Protocol):
 
     async def mint(self, asset_id: UUID) -> tuple[str, str]: ...
 
+    async def preload_media(self, asset: Asset) -> None: ...
+
+    async def mint_media(self, asset: Asset) -> tuple[str, str]: ...
+
     def confirm(self, url: str) -> None: ...
 
     def retire(self, url: str) -> None: ...
@@ -92,6 +97,20 @@ class CastCommands(Protocol):
         content_type: str,
         custom_data: dict[str, str],
     ) -> bool: ...
+
+    async def load_media(
+        self,
+        generation: int,
+        url: str,
+        content_type: str,
+        custom_data: dict[str, str],
+        *,
+        is_video: bool,
+        duration: float | None,
+        muted: bool,
+    ) -> bool: ...
+
+    async def release_audio(self, generation: int) -> None: ...
 
     async def refresh_status(self, generation: int) -> None: ...
 
@@ -376,6 +395,10 @@ class Coordinator:
                 state.source_state,
                 state.source_country,
             )
+            if self._source.kind is SourceKind.VIDEO:
+                self._source = replace(
+                    self._source, max_video_duration=self._settings.video_max_duration
+                )
             recent = state.recent_asset_ids or tuple(record.asset_id for record in state.records)
             self._recent.extend(UUID(asset_id) for asset_id in reversed(recent))
         except Exception:
@@ -446,26 +469,27 @@ class Coordinator:
         if self._active_command is not None or self.state is State.LOAD_PENDING:
             event.completion.set_result(False)
             return
-        if self._source == event.source:
+        source = (
+            replace(event.source, max_video_duration=self._settings.video_max_duration)
+            if event.source.kind is SourceKind.VIDEO
+            else event.source
+        )
+        if self._source == source:
             event.completion.set_result(True)
             return
         if self._history is not None:
             try:
                 await asyncio.to_thread(
                     self._history.set_source,
-                    event.source.kind.value,
-                    str(event.source.id) if event.source.id is not None else None,
-                    event.source.query,
-                    event.source.collection.value if event.source.collection is not None else None,
-                    event.source.start_date.isoformat()
-                    if event.source.start_date is not None
-                    else None,
-                    event.source.end_date.isoformat()
-                    if event.source.end_date is not None
-                    else None,
-                    event.source.city,
-                    event.source.state,
-                    event.source.country,
+                    source.kind.value,
+                    str(source.id) if source.id is not None else None,
+                    source.query,
+                    source.collection.value if source.collection is not None else None,
+                    source.start_date.isoformat() if source.start_date is not None else None,
+                    source.end_date.isoformat() if source.end_date is not None else None,
+                    source.city,
+                    source.state,
+                    source.country,
                 )
             except Exception:
                 self._error = "history persistence failed"
@@ -474,7 +498,7 @@ class Coordinator:
         owned = self._ownership_current()
         self._invalidate_work(preserve_expected=owned is not None)
         self._upcoming.clear()
-        self._source = event.source
+        self._source = source
         if owned is not None:
             self._expected = owned
             self.state = State.OWNED
@@ -621,6 +645,7 @@ class Coordinator:
             return
         if event.kind is EventKind.LOAD_FAILED:
             if self.state is State.LOAD_PENDING:
+                await self._release_audio()
                 self._enter_cooldown()
             return
         if event.kind is EventKind.RECEIVER and event.receiver is not None:
@@ -632,6 +657,7 @@ class Coordinator:
                 BACKDROP_RECEIVER,
                 DEFAULT_MEDIA_RECEIVER,
             }:
+                await self._release_audio()
                 self._retire_confirmed()
                 self._invalidate_work()
                 self._reclaim_pending = False
@@ -684,7 +710,7 @@ class Coordinator:
                 self.state = State.OWNED
                 await self._record_confirmation(owned)
                 if self._rotation_enabled:
-                    self._schedule("rotate", self._settings.interval)
+                    self._schedule("rotate", self._rotation_delay(media))
                 return
             if (
                 receiver.app_id == DEFAULT_MEDIA_RECEIVER
@@ -705,7 +731,7 @@ class Coordinator:
             if not self._reclaim_pending:
                 self._reclaim_asset = None
             if self._rotation_enabled and self._timer is None:
-                self._schedule("rotate", self._settings.interval)
+                self._schedule("rotate", self._rotation_delay(media))
             return
         if self._is_idle():
             self._reclaim_pending = False
@@ -721,6 +747,7 @@ class Coordinator:
                 self._schedule("idle", delay)
             return
         self._invalidate_work()
+        await self._release_audio()
         self._retire_confirmed()
         self._reclaim_pending = False
         self._reclaim_asset = None
@@ -846,8 +873,8 @@ class Coordinator:
         try:
             if mode == "reclaim" and self._reclaim_asset is not None:
                 try:
-                    reclaimed = Asset(self._reclaim_asset)
-                    url, content_type = await self._relay.mint(reclaimed.id)
+                    reclaimed = self._reclaimed_asset()
+                    url, content_type = await self._mint(reclaimed)
                 except AssetUnavailable:
                     pass
                 else:
@@ -899,7 +926,7 @@ class Coordinator:
             while candidates:
                 asset = candidates.pop(0)
                 try:
-                    url, content_type = await self._relay.mint(asset.id)
+                    url, content_type = await self._mint(asset)
                 except AssetUnavailable:
                     candidates = [candidate for candidate in candidates if candidate.id != asset.id]
                     discard = getattr(self._selector, "discard_asset", None)
@@ -950,18 +977,29 @@ class Coordinator:
             if self._preload is not None:
                 self._preload.cancel()
             self._preload = asyncio.create_task(
-                self._preload_next(self._upcoming[0].id), name="immich-next-image-preload"
+                self._preload_next(self._upcoming[0]), name="immich-next-media-preload"
             )
         self._prepared = event
         await self._request_refresh("next_load" if event.mode == "next" else "load")
 
-    async def _preload_next(self, asset_id: UUID) -> None:
+    async def _preload_next(self, asset: Asset) -> None:
         try:
-            await self._relay.preload(asset_id)
+            preload_media = getattr(self._relay, "preload_media", None)
+            if preload_media is not None:
+                await preload_media(asset)
+            elif asset.media_type is MediaType.IMAGE:
+                await self._relay.preload(asset.id)
         except (asyncio.CancelledError, Exception) as error:
             if isinstance(error, asyncio.CancelledError):
                 raise
             logger.warning("next_image_preload_failed")
+
+    async def _mint(self, asset: Asset) -> tuple[str, str]:
+        mint_media = getattr(self._relay, "mint_media", None)
+        if mint_media is not None:
+            url, content_type = await mint_media(asset)
+            return str(url), str(content_type)
+        return await self._relay.mint(asset.id)
 
     async def _send_prepared_load(self) -> None:
         if self._abandon_cancelled_command():
@@ -976,16 +1014,31 @@ class Coordinator:
             "loadId": load_id,
             "contentUrl": prepared.url,
             "assetId": str(prepared.asset.id),
+            "mediaType": prepared.asset.media_type.value,
         }
+        if prepared.asset.duration is not None:
+            metadata["duration"] = str(prepared.asset.duration)
         if self._output_id is not None:
             metadata["outputId"] = self._output_id
         self._expected = (load_id, prepared.url, prepared.asset.id)
         self._prepared = None
         self.state = State.LOAD_PENDING
         try:
-            sent = await self._cast.load_image(
-                self._generation, prepared.url, prepared.content_type or "", metadata
-            )
+            load_media = getattr(self._cast, "load_media", None)
+            if load_media is not None:
+                sent = await load_media(
+                    self._generation,
+                    prepared.url,
+                    prepared.content_type or "",
+                    metadata,
+                    is_video=prepared.asset.media_type is MediaType.VIDEO,
+                    duration=prepared.asset.duration,
+                    muted=self._settings.video_muted,
+                )
+            else:
+                sent = await self._cast.load_image(
+                    self._generation, prepared.url, prepared.content_type or "", metadata
+                )
         except Exception:
             sent = False
         if not sent or self.state is not State.LOAD_PENDING:
@@ -1026,6 +1079,45 @@ class Coordinator:
         except (KeyError, ValueError):
             return None
         return str(data["loadId"]), str(data["contentUrl"]), asset_id
+
+    def _reclaimed_asset(self) -> Asset:
+        assert self._reclaim_asset is not None
+        if self._media is None:
+            return Asset(self._reclaim_asset)
+        data = self._media[0].custom_data
+        media_type = (
+            MediaType.VIDEO if data.get("mediaType") == MediaType.VIDEO.value else MediaType.IMAGE
+        )
+        duration = self._metadata_duration(data) if media_type is MediaType.VIDEO else None
+        return Asset(self._reclaim_asset, media_type=media_type, duration=duration)
+
+    def _rotation_delay(self, media: MediaStatus) -> float:
+        if media.custom_data.get("mediaType") != MediaType.VIDEO.value:
+            return self._settings.interval
+        duration = self._metadata_duration(media.custom_data)
+        return (
+            min(duration or self._settings.video_max_duration, self._settings.video_max_duration)
+            + 1
+        )
+
+    @staticmethod
+    def _metadata_duration(data: dict[str, object]) -> float | None:
+        value = data.get("duration")
+        if isinstance(value, bool) or not isinstance(value, str | int | float):
+            return None
+        try:
+            duration = float(value)
+        except (TypeError, ValueError):
+            return None
+        return duration if duration > 0 else None
+
+    async def _release_audio(self) -> None:
+        release = getattr(self._cast, "release_audio", None)
+        if release is not None:
+            try:
+                await release(self._generation)
+            except Exception:
+                logger.warning("cast_audio_restore_failed")
 
     def _ownership_current(self) -> tuple[str, str, UUID] | None:
         if self._receiver is None or self._media is None:

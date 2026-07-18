@@ -585,6 +585,7 @@ function setReceiverOptions(select, selectedUuid) {
 const outputNumberFields = new Set([
   "discovery_timeout", "load_timeout", "interval", "idle_debounce", "cooldown",
   "recent_history", "candidate_batch", "autocast_delay",
+  "video_max_duration",
 ]);
 
 function outputField(labelText, field, value, options = {}) {
@@ -594,6 +595,10 @@ function outputField(labelText, field, value, options = {}) {
   if (field === "uuid") {
     control = document.createElement("select");
     setReceiverOptions(control, value);
+  } else if (field === "video_muted") {
+    control = document.createElement("input");
+    control.type = "checkbox";
+    control.checked = value ?? true;
   } else {
     control = document.createElement("input");
     if (outputNumberFields.has(field)) {
@@ -642,6 +647,8 @@ function makeOutputSettingsRow(output) {
     outputField("Repeat exclusion", "recent_history", output.recent_history, { min: "1", step: "1" }),
     outputField("Candidate batch", "candidate_batch", output.candidate_batch, { min: "1", step: "1" }),
     outputField("Autocast idle delay", "autocast_delay", output.autocast_delay),
+    outputField("Maximum video seconds", "video_max_duration", output.video_max_duration),
+    outputField("Mute videos", "video_muted", output.video_muted),
   );
   advanced.append(summary, fields);
   row.append(heading, basics, advanced);
@@ -678,6 +685,8 @@ function outputFromTemplate(template, { id, name, uuid }) {
     recent_history: template.recent_history ?? 25,
     candidate_batch: template.candidate_batch ?? 50,
     autocast_delay: template.autocast_delay ?? 30,
+    video_max_duration: template.video_max_duration ?? 30,
+    video_muted: template.video_muted ?? true,
   };
 }
 
@@ -757,7 +766,9 @@ function collectConfig() {
   result.outputs = [...outputSettingsList.querySelectorAll(".output-settings-row")].map(row => {
     const output = {};
     row.querySelectorAll("[data-output-field]").forEach(control => {
-      output[control.dataset.outputField] = control.type === "number" ? Number(control.value) : control.value;
+      output[control.dataset.outputField] = control.type === "number"
+        ? Number(control.value)
+        : control.type === "checkbox" ? control.checked : control.value;
     });
     return output;
   });
@@ -877,9 +888,10 @@ document.querySelector("#stop-button").addEventListener("click", () => performCo
 document.querySelector("#source-kind").addEventListener("change", event => {
   const outputId = state.selectedOutputId;
   const kind = event.currentTarget.value;
-  sourceDraft(outputId).pendingKind = kind === "timeline" ? null : kind;
+  sourceDraft(outputId).pendingKind = ["timeline", "video"].includes(kind) ? null : kind;
   showSourceControl(kind);
   if (kind === "timeline") applySource(outputId, { kind }, "Using the full timeline");
+  else if (kind === "video") applySource(outputId, { kind }, "Using short videos only");
   else if (kind.startsWith("event:") && kind !== "event:recent_person_recap") {
     const collection = kind.slice("event:".length);
     applySource(outputId, { kind: "event", collection }, `Using ${event.currentTarget.selectedOptions[0].textContent}`);

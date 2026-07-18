@@ -58,6 +58,38 @@ async def test_load_uses_live_media_and_custom_ownership_data() -> None:
 
 
 @pytest.mark.asyncio
+async def test_video_load_is_buffered_and_restores_receiver_mute() -> None:
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    adapter = CastAdapter(ChromecastSettings(UUID(int=1), 1, 1), queue)
+    adapter._loop = asyncio.get_running_loop()
+    adapter._generation = 4
+    controller = MediaController()
+    mute_calls: list[bool] = []
+    adapter._cast = SimpleNamespace(
+        media_controller=controller,
+        status=SimpleNamespace(volume_muted=False),
+        set_volume_muted=mute_calls.append,
+    )
+
+    sent = await adapter.load_media(
+        4,
+        "http://lan/video/token",
+        "video/mp4",
+        {"loadId": "x"},
+        is_video=True,
+        duration=12.5,
+        muted=True,
+    )
+    await adapter.release_audio(4)
+
+    assert sent is True
+    _args, kwargs = controller.calls[0]
+    assert kwargs["stream_type"] == "BUFFERED"
+    assert kwargs["media_info"] == {"customData": {"loadId": "x"}, "duration": 12.5}
+    assert mute_calls == [True, False]
+
+
+@pytest.mark.asyncio
 async def test_refresh_requests_receiver_and_media_status() -> None:
     adapter = CastAdapter(ChromecastSettings(UUID(int=1), 1, 1), asyncio.Queue())
     adapter._generation = 4

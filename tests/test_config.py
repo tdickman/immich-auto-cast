@@ -47,6 +47,15 @@ def test_loads_normalized_settings_and_environment_secret(tmp_path: Path) -> Non
     assert settings.immich.api_key == "environment-secret"
     assert settings.relay.advertised_base_url == "http://192.168.1.5:8787"
     assert settings.service.installation_id_file == tmp_path / "identity"
+    assert settings.outputs[0].rotation.video_max_duration == 30
+    assert settings.outputs[0].rotation.video_muted is True
+
+
+def test_rejects_non_boolean_video_muting(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(config_text().replace("interval = 30", 'interval = 30\nvideo_muted = "yes"'))
+    with pytest.raises(ConfigError, match="video_muted must be a boolean"):
+        load_settings(path)
 
 
 def test_installation_identity_persists(tmp_path: Path) -> None:
