@@ -43,6 +43,7 @@ class Cast:
         self.loads: list[tuple[int, str, str, dict[str, str]]] = []
         self.refreshes: list[int] = []
         self.stops: list[int] = []
+        self.cast_stops: list[int] = []
 
     async def load_image(
         self, generation: int, url: str, content_type: str, custom_data: dict[str, str]
@@ -55,6 +56,11 @@ class Cast:
 
     async def stop_media(self, generation: int) -> bool:
         self.stops.append(generation)
+        return True
+
+    async def stop_cast(self, generation: int) -> bool:
+        self.stops.append(generation)
+        self.cast_stops.append(generation)
         return True
 
 
@@ -213,6 +219,37 @@ async def test_disabled_autocast_does_not_load_and_can_be_enabled() -> None:
     assert await enabling is CommandResult.APPLIED
     assert history.autocast is True
     assert coordinator.snapshot.autocast_enabled is True
+
+    await send_idle_snapshot(coordinator)
+    await drain_one(queue, coordinator)
+
+    assert selector.calls == 1
+    await coordinator.close()
+
+
+@pytest.mark.asyncio
+async def test_disabling_autocast_stops_owned_photo_after_fresh_check() -> None:
+    history = History()
+    coordinator, queue, _selector, cast = make_coordinator(history)
+    await drive_idle_to_load(coordinator, queue)
+    url, metadata = await confirm_load(coordinator, cast)
+
+    disabling = asyncio.create_task(
+        coordinator.command(Command.AUTOCAST_DISABLE, "disable-autocast")
+    )
+    await drain_one(queue, coordinator)
+    assert not disabling.done()
+
+    await coordinator.handle(
+        event(EventKind.RECEIVER, receiver=ReceiverStatus("CC1AD845", "session"))
+    )
+    await coordinator.handle(event(EventKind.MEDIA, media=MediaStatus("PLAYING", url, 3, metadata)))
+
+    assert await disabling is CommandResult.APPLIED
+    assert cast.stops == [1]
+    assert cast.cast_stops == [1]
+    assert history.autocast is False
+    assert coordinator.snapshot.autocast_enabled is False
     await coordinator.close()
 
 
@@ -290,6 +327,31 @@ async def test_album_source_is_applied_to_the_next_selection() -> None:
     await drive_idle_to_load(coordinator, queue)
 
     assert selector.sources == [album_id]
+    assert coordinator.snapshot.selected_album == album_id
+    await coordinator.close()
+
+
+@pytest.mark.asyncio
+async def test_source_change_immediately_replaces_owned_photo() -> None:
+    album_id = UUID(int=99)
+    coordinator, queue, selector, cast = make_coordinator()
+    await drive_idle_to_load(coordinator, queue)
+    old_url, old_metadata = await confirm_load(coordinator, cast)
+
+    source_change = asyncio.create_task(coordinator.select_source(album_id))
+    await drain_one(queue, coordinator)
+    assert await source_change is True
+    await drain_one(queue, coordinator)
+    await coordinator.handle(
+        event(EventKind.RECEIVER, receiver=ReceiverStatus("CC1AD845", "session"))
+    )
+    await coordinator.handle(
+        event(EventKind.MEDIA, media=MediaStatus("PLAYING", old_url, 3, old_metadata))
+    )
+
+    assert selector.calls == 2
+    assert len(cast.loads) == 2
+    assert coordinator.state is State.LOAD_PENDING
     assert coordinator.snapshot.selected_album == album_id
     await coordinator.close()
 

@@ -287,3 +287,20 @@ async def test_stop_media_is_generation_scoped() -> None:
     assert controller.calls == []
     assert await adapter.stop_media(4) is True
     assert controller.calls == [(("stop",), {"timeout": 2})]
+
+
+@pytest.mark.asyncio
+async def test_stop_cast_stops_media_and_quits_receiver_app() -> None:
+    adapter = CastAdapter(ChromecastSettings(UUID(int=1), 1, 2), asyncio.Queue())
+    adapter._generation = 4
+    controller = MediaController()
+    quit_calls: list[bool] = []
+    adapter._cast = SimpleNamespace(
+        media_controller=controller,
+        quit_app=lambda: quit_calls.append(True),
+    )
+
+    assert await adapter.stop_cast(3) is False
+    assert await adapter.stop_cast(4) is True
+    assert controller.calls == [(("stop",), {"timeout": 2})]
+    assert quit_calls == [True]

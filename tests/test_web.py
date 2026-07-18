@@ -175,9 +175,10 @@ async def test_dashboard_assets_expose_complete_operator_interface(
     assert page.status == script.status == styles.status == 200
     assert 'id="chromecast-select"' in html
     assert 'name="immich.api_key" type="password"' in html
-    assert all(
-        label in html for label in ("Pause rotation", "Next photo", "Reconnect", "Stop cast")
-    )
+    assert all(label in html for label in ("Pause rotation", "Next photo", "Autocast on"))
+    assert "Reconnect" not in html
+    assert "Stop cast" not in html
+    assert 'id="autocast-status"' in html
     assert 'id="history-list"' in html
     assert 'id="current-list"' in html
     assert 'id="upcoming-list"' in html

@@ -75,6 +75,8 @@ class CastCommands(Protocol):
 
     async def stop_media(self, generation: int) -> bool: ...
 
+    async def stop_cast(self, generation: int) -> bool: ...
+
 
 class HistoryPersistence(Protocol):
     def load(self) -> HistoryState: ...
@@ -120,6 +122,7 @@ class CoordinatorSnapshot:
     source_kind: SourceKind = SourceKind.TIMELINE
     selected_person: UUID | None = None
     search_query: str | None = None
+    autocast_deadline: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,6 +200,8 @@ class Coordinator:
         self._startup_pending = True
         self._nonce = 0
         self._timer: asyncio.Task[None] | None = None
+        self._timer_purpose: str | None = None
+        self._autocast_deadline: float | None = None
         self._preparation: asyncio.Task[None] | None = None
         self._preload: asyncio.Task[None] | None = None
         self._prepared: _PreparedEvent | None = None
@@ -372,8 +377,7 @@ class Coordinator:
         if owned is not None:
             self._expected = owned
             self.state = State.OWNED
-            if self._rotation_enabled:
-                self._schedule("rotate", self._settings.interval)
+            self._begin_preparation("source")
         elif (
             self.state is State.IDLE_CANDIDATE and self._rotation_enabled and self._autocast_enabled
         ):
@@ -439,18 +443,24 @@ class Coordinator:
                 return
         self._autocast_enabled = enabled
         self._error = None
-        self._invalidate_work(preserve_expected=self._ownership_current() is not None)
         owned = self._ownership_current()
+        self._invalidate_work(preserve_expected=owned is not None)
         if owned is not None:
             self._expected = owned
             self.state = State.OWNED
-            if self._rotation_enabled:
-                self._schedule("rotate", self._settings.interval)
-        elif enabled and self.state is not State.UNAVAILABLE:
+            if enabled:
+                if self._rotation_enabled:
+                    self._schedule("rotate", self._settings.interval)
+                self._store_result(event, CommandResult.APPLIED)
+            else:
+                self._active_command = (event, owned)
+                await self._request_refresh("autocast_disable")
+            return
+        if enabled and self.state is not State.UNAVAILABLE:
             self._receiver = self._media = None
             await self._request_refresh("autocast_enable")
         else:
-            self.state = State.IDLE_CANDIDATE
+            self.state = State.IDLE_CANDIDATE if self._is_idle() else State.PROTECTED
         self._store_result(event, CommandResult.APPLIED)
 
     def _store_result(self, event: CommandEvent, result: CommandResult) -> None:
@@ -577,6 +587,9 @@ class Coordinator:
 
     async def _handle_timer(self, event: _TimerEvent) -> None:
         self._timer = None
+        self._timer_purpose = None
+        if event.purpose == "idle":
+            self._autocast_deadline = None
         if event.purpose == "cooldown":
             self._receiver = self._media = None
             await self._request_refresh("cooldown")
@@ -602,7 +615,12 @@ class Coordinator:
             return
         if purpose == "cooldown":
             await self._classify()
-        elif purpose in {"enable", "autocast_enable"}:
+        elif purpose == "enable":
+            await self._classify()
+        elif purpose == "autocast_enable" and self._is_idle():
+            self.state = State.IDLE_CANDIDATE
+            self._begin_preparation("idle")
+        elif purpose == "autocast_enable":
             await self._classify()
         elif purpose == "idle" and self._is_idle():
             self.state = State.IDLE_CANDIDATE
@@ -619,6 +637,18 @@ class Coordinator:
         elif purpose == "stop" and self._active_ownership_matches():
             try:
                 stopped = await self._cast.stop_media(self._generation)
+            except Exception:
+                stopped = False
+            self._complete_active(CommandResult.APPLIED if stopped else CommandResult.FAILED)
+            if stopped:
+                self._invalidate_work()
+                self._receiver = self._media = None
+                self.state = State.SYNCHRONIZING
+            else:
+                self._enter_cooldown()
+        elif purpose == "autocast_disable" and self._active_ownership_matches():
+            try:
+                stopped = await self._cast.stop_cast(self._generation)
             except Exception:
                 stopped = False
             self._complete_active(CommandResult.APPLIED if stopped else CommandResult.FAILED)
@@ -856,6 +886,9 @@ class Coordinator:
     def _schedule(self, purpose: str, delay: float) -> None:
         self._cancel_timer()
         nonce, generation = self._nonce, self._generation
+        self._timer_purpose = purpose
+        if purpose == "idle":
+            self._autocast_deadline = time.monotonic() + delay
 
         async def send_later() -> None:
             await asyncio.sleep(delay)
@@ -867,6 +900,9 @@ class Coordinator:
         if self._timer is not None:
             self._timer.cancel()
             self._timer = None
+        if self._timer_purpose == "idle":
+            self._autocast_deadline = None
+        self._timer_purpose = None
 
     def _invalidate_work(self, *, preserve_expected: bool = False) -> None:
         self._nonce += 1
@@ -899,4 +935,5 @@ class Coordinator:
             source_kind=self._source.kind,
             selected_person=self._source.id if self._source.kind is SourceKind.PERSON else None,
             search_query=self._source.query if self._source.kind is SourceKind.SEARCH else None,
+            autocast_deadline=self._autocast_deadline,
         )

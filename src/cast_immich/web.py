@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import ipaddress
 import secrets
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from importlib.resources import files
@@ -27,7 +28,7 @@ SECURITY_HEADERS = {
     "Cache-Control": "no-store",
     "Content-Security-Policy": (
         "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; "
-        "form-action 'self'; object-src 'none'; img-src 'self' data:"
+        "form-action 'self'; object-src 'none'; img-src 'self' data: blob:"
     ),
     "Referrer-Policy": "no-referrer",
     "X-Content-Type-Options": "nosniff",
@@ -501,6 +502,11 @@ def _runtime_json(snapshot: RuntimeSnapshot) -> dict[str, Any]:
         "coordinator": _coordinator_json(coordinator),
         "error": snapshot.error,
         "autocast_enabled": coordinator.autocast_enabled if coordinator is not None else True,
+        "autocast_remaining_seconds": (
+            max(0.0, coordinator.autocast_deadline - time.monotonic())
+            if coordinator is not None and coordinator.autocast_deadline is not None
+            else None
+        ),
         "source": (
             _source_json(
                 PhotoSource(

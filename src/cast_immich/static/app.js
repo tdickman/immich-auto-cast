@@ -1,6 +1,6 @@
 "use strict";
 
-const state = { csrf: "", revision: 0, config: null, dirty: false, timer: null, gallerySignature: "", pendingCommands: {}, changingSource: false };
+const state = { csrf: "", revision: 0, config: null, dirty: false, timer: null, countdownTimer: null, gallerySignature: "", pendingCommands: {}, changingSource: false, pendingSourceKind: null, autocastEnabled: true, autocastDeadline: null, thumbnailCache: new Map(), thumbnailAssetIds: new Set() };
 const form = document.querySelector("#settings-form");
 const toast = document.querySelector("#toast");
 
@@ -34,6 +34,23 @@ function titleCase(value) {
   return String(value || "unknown").replaceAll("_", " ").replace(/\b\w/g, c => c.toUpperCase());
 }
 
+function renderAutocastCountdown() {
+  const button = document.querySelector("#autocast-toggle");
+  const status = document.querySelector("#autocast-status");
+  button.classList.toggle("autocast-off", !state.autocastEnabled);
+  button.querySelector("span:last-child").textContent = state.autocastEnabled ? "Autocast on" : "Autocast off";
+  if (!state.autocastEnabled) {
+    status.textContent = "Autocast is off";
+    return;
+  }
+  if (state.autocastDeadline !== null) {
+    const remaining = Math.max(0, Math.ceil((state.autocastDeadline - Date.now()) / 1000));
+    status.textContent = `Casting in ${remaining}s`;
+    return;
+  }
+  status.textContent = "Autocast is on";
+}
+
 function renderStatus(payload) {
   state.csrf = payload.csrf_token || state.csrf;
   const coordinator = payload.coordinator;
@@ -59,17 +76,22 @@ function renderStatus(payload) {
   toggle.querySelector(".button-mark").textContent = enabled ? "Ⅱ" : "▶";
   toggle.querySelector("span:last-child").textContent = enabled ? "Pause rotation" : "Enable rotation";
   document.querySelector("#next-button").disabled = !owned;
-  document.querySelector("#stop-button").disabled = !owned;
-  document.querySelector("#reconnect-button").disabled = !active;
   document.querySelector("#source-kind").disabled = !active || state.changingSource;
   document.querySelector("#album-select").disabled = !active || state.changingSource;
   document.querySelector("#person-select").disabled = !active || state.changingSource;
   const autocast = payload.autocast_enabled ?? true;
+  state.autocastEnabled = autocast;
+  state.autocastDeadline = typeof payload.autocast_remaining_seconds === "number"
+    ? Date.now() + payload.autocast_remaining_seconds * 1000
+    : null;
   const autocastToggle = document.querySelector("#autocast-toggle");
   autocastToggle.disabled = !active;
   autocastToggle.dataset.command = autocast ? "autocast_disable" : "autocast_enable";
-  autocastToggle.querySelector("span:last-child").textContent = autocast ? "Disable autocast" : "Enable autocast";
-  if (!state.changingSource && payload.source) {
+  renderAutocastCountdown();
+  if (state.pendingSourceKind) {
+    document.querySelector("#source-kind").value = state.pendingSourceKind;
+    showSourceControl(state.pendingSourceKind);
+  } else if (!state.changingSource && payload.source) {
     document.querySelector("#source-kind").value = payload.source.kind;
     document.querySelector("#album-select").value = payload.source.kind === "album" ? payload.source.id : "";
     document.querySelector("#person-select").value = payload.source.kind === "person" ? payload.source.id : "";
@@ -114,11 +136,72 @@ async function loadConfig() {
     : payload.api_key_configured ? "A key is configured. Leave blank to preserve it." : "No key configured.";
 }
 
+function preloadThumbnail(record) {
+  const existing = state.thumbnailCache.get(record.asset_id);
+  if (existing) return existing.promise;
+  const entry = { url: null, promise: null };
+  entry.promise = (async () => {
+    const response = await fetch(record.thumbnail_url, { cache: "no-store" });
+    if (!response.ok) throw new Error("Thumbnail unavailable");
+    const url = URL.createObjectURL(await response.blob());
+    if (!state.thumbnailAssetIds.has(record.asset_id)) {
+      URL.revokeObjectURL(url);
+      throw new Error("Thumbnail no longer needed");
+    }
+    entry.url = url;
+    const image = new Image();
+    image.src = url;
+    await image.decode();
+    if (!state.thumbnailAssetIds.has(record.asset_id) || state.thumbnailCache.get(record.asset_id) !== entry) {
+      throw new Error("Thumbnail no longer needed");
+    }
+    return url;
+  })().catch(error => {
+    if (entry.url) URL.revokeObjectURL(entry.url);
+    entry.url = null;
+    if (state.thumbnailCache.get(record.asset_id) === entry) {
+      state.thumbnailCache.delete(record.asset_id);
+    }
+    throw error;
+  });
+  state.thumbnailCache.set(record.asset_id, entry);
+  return entry.promise;
+}
+
+function usePreloadedThumbnail(image, record) {
+  image.dataset.assetId = record.asset_id;
+  const entry = state.thumbnailCache.get(record.asset_id);
+  if (entry?.url) {
+    image.src = entry.url;
+    return;
+  }
+  preloadThumbnail(record).then(url => {
+    if (image.dataset.assetId === record.asset_id) image.src = url;
+  }).catch(() => {
+    if (image.dataset.assetId === record.asset_id) image.src = record.thumbnail_url;
+  });
+}
+
+function updateThumbnailCache(records) {
+  state.thumbnailAssetIds = new Set(records.map(record => record.asset_id));
+  for (const [assetId, entry] of state.thumbnailCache) {
+    if (state.thumbnailAssetIds.has(assetId)) continue;
+    if (entry.url) URL.revokeObjectURL(entry.url);
+    state.thumbnailCache.delete(assetId);
+  }
+  records.forEach(record => { preloadThumbnail(record).catch(() => {}); });
+}
+
 async function loadHistory() {
   const payload = await request("/api/history");
   document.querySelector("#history-count").textContent = String(payload.records.length);
   document.querySelector("#upcoming-count").textContent = String(payload.upcoming.length);
   document.querySelector("#current-count").textContent = payload.current ? "1" : "0";
+  updateThumbnailCache([
+    ...(payload.current ? [payload.current] : []),
+    ...payload.records,
+    ...payload.upcoming,
+  ]);
   const signature = JSON.stringify([
     payload.current?.asset_id,
     payload.records.map(record => [record.event_id, record.confirmed_at]),
@@ -130,7 +213,7 @@ async function loadHistory() {
     const figure = document.createElement("figure");
     figure.className = "photo-record current-record";
     const image = document.createElement("img");
-    image.src = record.thumbnail_url;
+    usePreloadedThumbnail(image, record);
     image.alt = "Currently displayed Immich photo";
     const caption = document.createElement("div");
     caption.className = "photo-caption";
@@ -141,9 +224,8 @@ async function loadHistory() {
   renderGallery("#history-list", payload.records, "No confirmed photos yet.", (record, index) => {
     const figure = photoButton("history", record.event_id, index);
     const image = document.createElement("img");
-    image.src = record.thumbnail_url;
+    usePreloadedThumbnail(image, record);
     image.alt = "Recently displayed Immich photo";
-    image.loading = "lazy";
     const caption = document.createElement("div");
     caption.className = "photo-caption";
     const time = document.createElement("time");
@@ -156,9 +238,8 @@ async function loadHistory() {
   renderGallery("#upcoming-list", payload.upcoming, "The next photos will appear when rotation begins.", (record, index) => {
     const figure = photoButton("upcoming", record.asset_id, index, "upcoming-record");
     const image = document.createElement("img");
-    image.src = record.thumbnail_url;
+    usePreloadedThumbnail(image, record);
     image.alt = `Upcoming Immich photo ${index + 1}`;
-    image.loading = "lazy";
     const caption = document.createElement("div");
     caption.className = "photo-caption";
     const position = document.createElement("strong");
@@ -205,10 +286,12 @@ async function applySource(source, message) {
   state.changingSource = true;
   try {
     await mutate("/api/source", source);
+    state.pendingSourceKind = null;
     state.gallerySignature = "";
     notify(message);
     await refresh();
   } catch (error) {
+    state.pendingSourceKind = null;
     notify(error.message, true);
     await Promise.all([loadAlbums(), loadPeople()]);
   } finally {
@@ -318,16 +401,9 @@ document.querySelector("#reset-button").addEventListener("click", () => {
 document.querySelector("#rotation-toggle").addEventListener("click", event => performControl(event.currentTarget.dataset.command));
 document.querySelector("#autocast-toggle").addEventListener("click", event => performControl(event.currentTarget.dataset.command));
 document.querySelector("#next-button").addEventListener("click", () => performControl("next"));
-document.querySelector("#stop-button").addEventListener("click", () => performControl("stop"));
-document.querySelector("#reconnect-button").addEventListener("click", async () => {
-  const button = document.querySelector("#reconnect-button");
-  button.disabled = true;
-  try { await mutate("/api/reconnect", {}); notify("Reconnect requested"); }
-  catch (error) { notify(error.message, true); }
-  finally { button.disabled = false; }
-});
 document.querySelector("#source-kind").addEventListener("change", event => {
   const kind = event.currentTarget.value;
+  state.pendingSourceKind = kind === "timeline" ? null : kind;
   showSourceControl(kind);
   if (kind === "timeline") applySource({ kind }, "Using the full timeline");
 });
@@ -363,6 +439,7 @@ async function boot() {
   catch (error) { notify(error.message, true); }
   document.querySelector("#discover-button").click();
   state.timer = window.setInterval(refresh, 3500);
+  state.countdownTimer = window.setInterval(renderAutocastCountdown, 250);
 }
 
 boot();

@@ -272,6 +272,17 @@ class CastAdapter:
         await asyncio.to_thread(cast.media_controller.stop, timeout=self._settings.load_timeout)
         return generation == self._generation and cast is self._cast and not self._stopping
 
+    async def stop_cast(self, generation: int) -> bool:
+        """Stop owned media and terminate its receiver app on the current generation."""
+        if generation != self._generation or self._cast is None or self._stopping:
+            return False
+        cast = self._cast
+        await asyncio.to_thread(cast.media_controller.stop, timeout=self._settings.load_timeout)
+        if generation != self._generation or cast is not self._cast or self._stopping:
+            return False
+        await asyncio.to_thread(cast.quit_app)
+        return generation == self._generation and cast is self._cast and not self._stopping
+
     async def _discovery_loop(self) -> None:
         delay = 1.0
         while not self._stopping:

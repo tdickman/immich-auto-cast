@@ -68,7 +68,7 @@ The service owns a session only when versioned media metadata contains its persi
 
 Chromecast does not provide an atomic “load only if still idle” operation. A user can start playback in the small interval between the final status check and `LOAD`; this is an unavoidable best-effort race. The service minimizes it and never sends a compensating stop, because that could stop the user's new media.
 
-Pause cancels timers and unsent image preparation but leaves current receiver media untouched. An explicit dashboard stop sends `STOP` only after fresh positive ownership; it cannot stop external, unknown, or ambiguously owned media. Reconnect never stops receiver media.
+Pause cancels timers and unsent image preparation but leaves current receiver media untouched. Turning autocast off sends `STOP` only after fresh positive ownership; it cannot stop external, unknown, or ambiguously owned media. Turning autocast on casts immediately when the receiver is idle. After later idle transitions, the dashboard counts down the configured delay before casting again.
 
 ## Operations
 
