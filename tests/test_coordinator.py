@@ -232,6 +232,8 @@ async def test_stable_idle_sends_exactly_one_load_and_confirms_ownership() -> No
         )
     )
     assert coordinator.snapshot.state is State.OWNED
+    assert coordinator.snapshot.rotation_deadline is not None
+    assert 0 < coordinator.snapshot.rotation_deadline - time.monotonic() <= 0.02
     assert len(cast.loads) == 1
     await coordinator.close()
 

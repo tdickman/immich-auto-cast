@@ -5,6 +5,7 @@ const state = {
   mode: "setup", error: "", outputs: new Map(), histories: new Map(), historySignatures: new Map(),
   selectedOutputId: localStorage.getItem("cast-immich-output"), pendingCommands: new Map(), commandInFlight: new Set(),
   sourceDrafts: new Map(), thumbnailCache: new Map(), pendingSeeks: new Map(), autocastDeadlines: new Map(),
+  rotationDeadlines: new Map(),
   thumbnailKeys: new Map(), devices: [],
   disconnectedSince: null, lastContact: null, catalogRetryAt: 0,
   albumsLoaded: false, peopleLoaded: false,
@@ -139,6 +140,22 @@ function renderAutocastControl() {
   }
 }
 
+function renderNextPhotoCountdown() {
+  const countdown = document.querySelector("#next-photo-countdown");
+  const output = state.outputs.get(state.selectedOutputId);
+  const deadline = state.rotationDeadlines.get(state.selectedOutputId);
+  const remaining = deadline === undefined ? Infinity : (deadline - Date.now()) / 1000;
+  const visible = state.disconnectedSince === null
+    && output?.coordinator?.state === "owned"
+    && rotationEnabled(output)
+    && remaining > 0
+    && remaining <= 5;
+  countdown.hidden = !visible;
+  if (!visible) return;
+  countdown.querySelector("span").style.transform = `scaleX(${Math.min(1, remaining / 5)})`;
+  countdown.setAttribute("aria-label", `Next photo in ${Math.ceil(remaining)} seconds`);
+}
+
 function renderSelectedWorkspace() {
   const outputId = state.selectedOutputId;
   const output = state.outputs.get(outputId);
@@ -186,6 +203,7 @@ function renderSelectedWorkspace() {
   if (!draft.searchDirty && document.activeElement !== search) search.value = source.kind === "search" ? source.query || "" : draft.searchQuery;
   showSourceControl(kind);
   renderAutocastControl();
+  renderNextPhotoCountdown();
 }
 
 function renderStatus(payload) {
@@ -199,9 +217,15 @@ function renderStatus(payload) {
     if (typeof output.autocast_remaining_seconds === "number") {
       state.autocastDeadlines.set(output.id, Date.now() + output.autocast_remaining_seconds * 1000);
     } else state.autocastDeadlines.delete(output.id);
+    if (typeof output.next_photo_remaining_seconds === "number") {
+      state.rotationDeadlines.set(output.id, Date.now() + output.next_photo_remaining_seconds * 1000);
+    } else state.rotationDeadlines.delete(output.id);
   }
   for (const outputId of [...state.autocastDeadlines.keys()]) {
     if (!state.outputs.has(outputId)) state.autocastDeadlines.delete(outputId);
+  }
+  for (const outputId of [...state.rotationDeadlines.keys()]) {
+    if (!state.outputs.has(outputId)) state.rotationDeadlines.delete(outputId);
   }
   if (!state.outputs.has(state.selectedOutputId)) state.selectedOutputId = state.outputs.keys().next().value || null;
   if (state.selectedOutputId) localStorage.setItem("cast-immich-output", state.selectedOutputId);
@@ -889,6 +913,7 @@ async function boot() {
   state.timer = window.setInterval(refresh, 3500);
   state.countdownTimer = window.setInterval(() => {
     renderAutocastControl();
+    renderNextPhotoCountdown();
     if (state.disconnectedSince !== null) renderServiceSignal();
   }, 250);
 }

@@ -149,6 +149,7 @@ class CoordinatorSnapshot:
     health_reason: str = "starting"
     health_message: str = "Connecting to Chromecast"
     retry_deadline: float | None = None
+    rotation_deadline: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,6 +242,7 @@ class Coordinator:
         self._failure_count = 0
         self._immich_failure: ImmichError | None = None
         self._retry_deadline: float | None = None
+        self._rotation_deadline: float | None = None
         self._stopping = False
         self._active_command: tuple[CommandEvent, tuple[str, str, UUID] | None] | None = None
         self._command_results: OrderedDict[
@@ -695,6 +697,8 @@ class Coordinator:
         self._timer_purpose = None
         if event.purpose == "idle":
             self._autocast_deadline = None
+        elif event.purpose == "rotate":
+            self._rotation_deadline = None
         if event.purpose == "cooldown":
             self._receiver = self._media = None
             await self._request_refresh("cooldown")
@@ -1056,6 +1060,8 @@ class Coordinator:
         self._timer_purpose = purpose
         if purpose == "idle":
             self._autocast_deadline = time.monotonic() + delay
+        elif purpose == "rotate":
+            self._rotation_deadline = time.monotonic() + delay
 
         async def send_later() -> None:
             await asyncio.sleep(delay)
@@ -1069,6 +1075,8 @@ class Coordinator:
             self._timer = None
         if self._timer_purpose == "idle":
             self._autocast_deadline = None
+        elif self._timer_purpose == "rotate":
+            self._rotation_deadline = None
         self._timer_purpose = None
 
     def _invalidate_work(self, *, preserve_expected: bool = False) -> None:
@@ -1108,6 +1116,7 @@ class Coordinator:
             health_reason=reason,
             health_message=message,
             retry_deadline=self._retry_deadline,
+            rotation_deadline=self._rotation_deadline,
         )
 
     def _health(self) -> tuple[HealthLevel, str, str]:

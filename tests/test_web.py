@@ -166,6 +166,7 @@ async def test_status_and_config_are_safe_and_setup_schema_is_complete(
         "uuid": "12345678-1234-4234-8234-123456789abc"
     }
     assert status_payload["outputs"][0]["available_actions"]["stop"] is True
+    assert status_payload["outputs"][0]["next_photo_remaining_seconds"] is None
     assert status_payload["coordinator"] == {
         "state": "protected",
         "rotation_enabled": True,
@@ -225,6 +226,7 @@ async def test_dashboard_assets_expose_complete_operator_interface(
     assert 'id="cast-detail"' not in html
     assert 'class="readout-label"' not in html
     assert 'id="autocast-status" role="timer"' in html
+    assert 'id="next-photo-countdown" role="timer"' in html
     assert "Selected output" not in html
     assert "Now showing /" not in javascript
     assert "Previous /" not in javascript
@@ -269,6 +271,7 @@ async def test_dashboard_assets_expose_complete_operator_interface(
     assert 'actionAvailable(output, "stop")' in javascript
     assert 'output.autocast_enabled ? "Disable autocast" : "Enable autocast"' in javascript
     assert "output.autocast_remaining_seconds" in javascript
+    assert "output.next_photo_remaining_seconds" in javascript
     assert "Autocast in ${remaining}s" in javascript
     assert "if (state.disconnectedSince !== null) renderServiceSignal()" in javascript
     assert "Dashboard connection lost" in javascript

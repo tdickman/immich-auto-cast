@@ -551,6 +551,11 @@ def _legacy_output_json(output: OutputSnapshot, active: bool) -> dict[str, Any]:
             if coordinator.autocast_deadline is not None
             else None
         ),
+        "next_photo_remaining_seconds": (
+            max(0.0, coordinator.rotation_deadline - time.monotonic())
+            if coordinator.rotation_deadline is not None
+            else None
+        ),
         "source": _source_json(
             PhotoSource(
                 coordinator.source_kind,
