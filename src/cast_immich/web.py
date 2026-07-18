@@ -81,6 +81,9 @@ def create_management_app(
     async def stylesheet(_request: web.Request) -> web.Response:
         return _static_response("styles.css", "text/css")
 
+    async def favicon(_request: web.Request) -> web.Response:
+        return _static_response("favicon.svg", "image/svg+xml")
+
     async def status(request: web.Request) -> web.Response:
         payload = _runtime_json(supervisor.snapshot)
         if _origin_is_absent_or_same(request, allowed_hosts):
@@ -376,6 +379,7 @@ def create_management_app(
     app.router.add_get("/", index)
     app.router.add_get("/app.js", script)
     app.router.add_get("/styles.css", stylesheet)
+    app.router.add_get("/favicon.svg", favicon)
     app.router.add_get("/api/status", status)
     app.router.add_get("/api/config", config)
     app.router.add_put("/api/config", save)

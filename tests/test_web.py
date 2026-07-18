@@ -196,11 +196,18 @@ async def test_dashboard_assets_expose_complete_operator_interface(
     page = await client.get("/")
     script = await client.get("/app.js")
     styles = await client.get("/styles.css")
+    favicon = await client.get("/favicon.svg")
     html = await page.text()
     javascript = await script.text()
     css = await styles.text()
+    icon = await favicon.text()
 
-    assert page.status == script.status == styles.status == 200
+    assert page.status == script.status == styles.status == favicon.status == 200
+    assert '<link rel="icon" href="/favicon.svg" type="image/svg+xml">' in html
+    assert favicon.content_type == "image/svg+xml"
+    assert 'viewBox="0 0 64 64"' in icon
+    assert '#19201d' in icon
+    assert '#e55c38' in icon
     assert 'name="immich.api_key" type="password"' in html
     assert 'aria-describedby="api-key-permissions key-status"' in html
     for permission in ("asset.read", "asset.view", "album.read", "person.read"):
