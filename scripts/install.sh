@@ -64,7 +64,7 @@ printf 'Installing locked application dependencies...\n'
 sudo -u "$APP_USER" env HOME="$APP_HOME" "$UV_BIN" sync \
     --project "$APP_DIR" --locked --no-dev
 
-UNIT_TMP="$(mktemp)"
+UNIT_TMP="$(mktemp --suffix=.service)"
 UPDATE_CONFIG_TMP="$(mktemp)"
 trap 'rm -f "$UNIT_TMP" "$UPDATE_CONFIG_TMP"' EXIT
 
@@ -74,9 +74,6 @@ escape_systemd() {
     printf '"%s"' "$value"
 }
 
-APP_DIR_UNIT="$(escape_systemd "$APP_DIR")"
-APP_USER_UNIT="$(escape_systemd "$APP_USER")"
-APP_GROUP_UNIT="$(escape_systemd "$APP_GROUP")"
 EXECUTABLE_UNIT="$(escape_systemd "$APP_DIR/.venv/bin/cast-immich")"
 CONFIG_UNIT="$(escape_systemd "$APP_DIR/config.toml")"
 WEB_HOST_UNIT="$(escape_systemd "$WEB_HOST")"
@@ -89,9 +86,9 @@ After=network-online.target
 
 [Service]
 Type=simple
-User=$APP_USER_UNIT
-Group=$APP_GROUP_UNIT
-WorkingDirectory=$APP_DIR_UNIT
+User=$APP_USER
+Group=$APP_GROUP
+WorkingDirectory=$APP_DIR
 ExecStart=$EXECUTABLE_UNIT --config $CONFIG_UNIT --web-host $WEB_HOST_UNIT --web-port $WEB_PORT
 Restart=on-failure
 RestartSec=10
@@ -102,6 +99,8 @@ ProtectSystem=full
 [Install]
 WantedBy=multi-user.target
 EOF
+
+systemd-analyze verify "$UNIT_TMP"
 
 {
     printf 'CAST_IMMICH_APP_DIR=%q\n' "$APP_DIR"
