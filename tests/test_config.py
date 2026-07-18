@@ -50,7 +50,7 @@ def test_loads_normalized_settings_and_environment_secret(tmp_path: Path) -> Non
     assert settings.outputs[0].rotation.video_max_duration == 30
     assert settings.outputs[0].rotation.video_muted is True
     assert settings.outputs[0].rotation.show_web_qr is False
-    assert settings.outputs[0].rotation.web_qr_size == 1
+    assert settings.outputs[0].rotation.web_qr_size == 2
     assert settings.outputs[0].rotation.web_qr_position == "bottom-left"
     assert settings.outputs[0].rotation.web_qr_inset_x == 36
     assert settings.outputs[0].rotation.web_qr_inset_y == 36

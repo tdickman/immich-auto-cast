@@ -645,7 +645,7 @@ function makeOutputSettingsRow(output) {
     outputField("QR corner", "web_qr_position", output.web_qr_position),
     outputField("Horizontal inset", "web_qr_inset_x", output.web_qr_inset_x, { min: "0", max: "640", step: "1" }),
     outputField("Vertical inset", "web_qr_inset_y", output.web_qr_inset_y, { min: "0", max: "360", step: "1" }),
-    outputField("QR opacity (%)", "web_qr_opacity", output.web_qr_opacity, { min: "50", max: "100", step: "1" }),
+    outputField("QR surround opacity (%)", "web_qr_opacity", output.web_qr_opacity, { min: "50", max: "100", step: "1" }),
   );
   const qrHint = document.createElement("p");
   qrHint.className = "field-hint qr-placement-hint";
@@ -689,7 +689,7 @@ function outputFromTemplate(template, { id, name, uuid }) {
     video_max_duration: template.video_max_duration ?? 30,
     video_muted: template.video_muted ?? true,
     show_web_qr: template.show_web_qr ?? false,
-    web_qr_size: template.web_qr_size ?? 1,
+    web_qr_size: template.web_qr_size ?? 2,
     web_qr_position: template.web_qr_position ?? "bottom-left",
     web_qr_inset_x: template.web_qr_inset_x ?? 36,
     web_qr_inset_y: template.web_qr_inset_y ?? 36,

@@ -8,7 +8,7 @@ from uuid import UUID
 import aiohttp
 import pytest
 from aiohttp import web
-from PIL import Image, ImageChops, ImageStat
+from PIL import Image, ImageChops
 
 from cast_immich.config import ImmichSettings, RelaySettings
 from cast_immich.immich import Asset, ImmichClient, MediaType, Preview
@@ -34,7 +34,7 @@ def test_metadata_stays_inside_title_safe_right_margin() -> None:
     assert bounds[2] <= image.width - min(image.size) // 20 + 1
 
 
-def test_web_qr_badge_adapts_to_background_brightness() -> None:
+def test_web_qr_keeps_standard_polarity_while_surround_adapts() -> None:
     qr = _make_qr("http://192.168.1.5:8080/")
     dark = Image.new("RGB", (1280, 720), (40, 40, 40))
     light = Image.new("RGB", (1280, 720), (220, 220, 220))
@@ -54,8 +54,10 @@ def test_web_qr_badge_adapts_to_background_brightness() -> None:
     dark_module = dark.getpixel((margin + padding + module_x, top + padding + module_y))
     light_module = light.getpixel((margin + padding + module_x, top + padding + module_y))
 
-    assert min(dark_module) > 180
-    assert max(light_module) < 70
+    assert max(dark_module) == 0
+    assert max(light_module) == 0
+    assert min(dark.getpixel((margin + padding, top + padding))) == 255
+    assert min(light.getpixel((margin + padding, top + padding))) == 255
     assert max(dark.getpixel((margin + 1, top + qr.height // 2))) < 40
     assert min(light.getpixel((margin + 1, top + qr.height // 2))) > 220
 
@@ -83,9 +85,12 @@ def test_web_qr_opacity_dims_the_badge() -> None:
     _draw_web_qr(dimmed, qr, QrPlacement(1, "bottom-left", 36, 36, 50))
     _draw_web_qr(opaque, qr, QrPlacement(1, "bottom-left", 36, 36, 100))
 
-    dimmed_difference = ImageStat.Stat(ImageChops.difference(original, dimmed)).sum
-    opaque_difference = ImageStat.Stat(ImageChops.difference(original, opaque)).sum
-    assert sum(dimmed_difference) < sum(opaque_difference)
+    padding = max(2, qr.width // 12)
+    top = dimmed.height - qr.height - padding * 2 - 36
+    outer_pixel = (37, top + qr.height // 2)
+    assert min(dimmed.getpixel(outer_pixel)) > min(opaque.getpixel(outer_pixel))
+    assert dimmed.getpixel((36 + padding, top + padding)) == (255, 255, 255)
+    assert opaque.getpixel((36 + padding, top + padding)) == (255, 255, 255)
 
 
 def test_web_qr_accepts_authenticated_dashboard_url() -> None:

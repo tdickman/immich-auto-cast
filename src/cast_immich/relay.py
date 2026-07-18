@@ -70,7 +70,7 @@ class QrPlacement:
     opacity: int
 
 
-DEFAULT_QR_PLACEMENT = QrPlacement(1, "bottom-left", 36, 36, 75)
+DEFAULT_QR_PLACEMENT = QrPlacement(2, "bottom-left", 36, 36, 75)
 
 
 class ImageRelay:
@@ -131,7 +131,7 @@ class ImageRelay:
         asset: Asset | UUID,
         *,
         show_web_qr: bool = False,
-        web_qr_size: float = 1,
+        web_qr_size: float = 2,
         web_qr_position: str = "bottom-left",
         web_qr_inset_x: int = 36,
         web_qr_inset_y: int = 36,
@@ -155,7 +155,7 @@ class ImageRelay:
         asset: Asset,
         *,
         show_web_qr: bool = False,
-        web_qr_size: float = 1,
+        web_qr_size: float = 2,
         web_qr_position: str = "bottom-left",
         web_qr_inset_x: int = 36,
         web_qr_inset_y: int = 36,
@@ -176,7 +176,7 @@ class ImageRelay:
         asset: Asset | UUID,
         *,
         show_web_qr: bool = False,
-        web_qr_size: float = 1,
+        web_qr_size: float = 2,
         web_qr_position: str = "bottom-left",
         web_qr_inset_x: int = 36,
         web_qr_inset_y: int = 36,
@@ -218,7 +218,7 @@ class ImageRelay:
         asset: Asset,
         *,
         show_web_qr: bool = False,
-        web_qr_size: float = 1,
+        web_qr_size: float = 2,
         web_qr_position: str = "bottom-left",
         web_qr_inset_x: int = 36,
         web_qr_inset_y: int = 36,
@@ -239,7 +239,7 @@ class ImageRelay:
         asset_id: UUID,
         *,
         show_web_qr: bool = False,
-        web_qr_size: float = 1,
+        web_qr_size: float = 2,
         web_qr_position: str = "bottom-left",
         web_qr_inset_x: int = 36,
         web_qr_inset_y: int = 36,
@@ -525,19 +525,19 @@ def _draw_web_qr(
     dark_background = luminance < 145
     opacity = placement.opacity / 100
     background_alpha = round((155 if dark_background else 175) * opacity)
-    module_alpha = round((245 if dark_background else 240) * opacity)
     background = (
         (0, 0, 0, background_alpha) if dark_background else (255, 255, 255, background_alpha)
     )
-    module = (255, 255, 255, module_alpha) if dark_background else (0, 0, 0, module_alpha)
 
     badge = Image.new("RGBA", (width, height))
     draw = ImageDraw.Draw(badge)
     draw.rounded_rectangle(
         (0, 0, width - 1, height - 1), radius=max(4, padding * 2), fill=background
     )
+    qr_surface = Image.new("RGBA", qr.size, (255, 255, 255, 255))
+    badge.paste(qr_surface, (padding, padding))
     module_mask = ImageOps.invert(qr.convert("L"))
-    modules = Image.new("RGBA", qr.size, module)
+    modules = Image.new("RGBA", qr.size, (0, 0, 0, 255))
     badge.paste(modules, (padding, padding), module_mask)
     image.paste(badge, (left, top), badge)
 

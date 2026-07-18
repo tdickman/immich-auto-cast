@@ -308,7 +308,7 @@ async def test_dashboard_assets_expose_complete_operator_interface(
     assert 'outputField("QR corner", "web_qr_position"' in javascript
     assert 'outputField("Horizontal inset", "web_qr_inset_x"' in javascript
     assert 'outputField("Vertical inset", "web_qr_inset_y"' in javascript
-    assert 'outputField("QR opacity (%)", "web_qr_opacity"' in javascript
+    assert 'outputField("QR surround opacity (%)", "web_qr_opacity"' in javascript
     assert 'className = "qr-placement-preview"' not in javascript
     assert 'badge.addEventListener("pointermove"' not in javascript
     assert "Save changes to reload the current TV image" in javascript
