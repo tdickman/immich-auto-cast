@@ -342,7 +342,7 @@ def _normalize_preview(
             if location or date:
                 _draw_metadata(image, location, date)
             if web_qr is not None:
-                margin = max(12, min(image.size) // 40)
+                margin = max(12, min(image.size) // 20)
                 image.paste(web_qr, (margin, image.height - web_qr.height - margin))
             output = io.BytesIO()
             image.save(output, format="JPEG", quality=90, optimize=True)
@@ -391,7 +391,7 @@ def _draw_location(image: Image.Image, location: str) -> None:
 
 
 def _make_qr(url: str) -> Image.Image:
-    code = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=2, border=4)
+    code = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=1, border=4)
     code.add_data(url)
     code.make(fit=True)
     return cast(
