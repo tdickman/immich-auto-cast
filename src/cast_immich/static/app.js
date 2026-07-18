@@ -227,7 +227,7 @@ function renderServiceSignal() {
 }
 
 function thumbnailKey(outputId, record) {
-  return `${outputId}\u0000${record.thumbnail_url}`;
+  return `${outputId}\u0000${record.asset_id}`;
 }
 
 function preloadThumbnail(outputId, record) {

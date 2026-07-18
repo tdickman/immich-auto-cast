@@ -240,6 +240,8 @@ async def test_dashboard_assets_expose_complete_operator_interface(
     assert 'link.target = "_blank"' in javascript
     assert 'button.textContent = isPending ? "…" : "▶"' in javascript
     assert "function preloadThumbnail(outputId, record)" in javascript
+    assert "`${outputId}\\u0000${record.asset_id}`" in javascript
+    assert "`${outputId}\\u0000${record.thumbnail_url}`" not in javascript
     assert 'fetch(record.thumbnail_url, { cache: "no-store" })' in javascript
     assert "await image.decode()" in javascript
     assert "records.forEach(record => { preloadThumbnail" in javascript
