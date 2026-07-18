@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>Cast Immich Control</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <div class="grain" aria-hidden="true"></div>
+    <header class="masthead">
+      <a class="wordmark" href="/" aria-label="Cast Immich home">
+        <span>CAST</span><i>/</i><span>IMMICH</span>
+      </a>
+      <div class="service-signal" role="status" aria-live="polite">
+        <span class="signal-dot" id="signal-dot"></span>
+        <span id="service-mode">Connecting</span>
+      </div>
+    </header>
+
+    <main>
+      <section class="control-stage" aria-labelledby="control-title">
+        <div class="stage-copy">
+          <p class="eyebrow">Receiver control</p>
+          <h1 id="control-title">The room,<br>at a glance.</h1>
+          <p class="stage-note" id="ownership-note">Waiting for service status.</p>
+        </div>
+
+        <div class="control-console">
+          <div class="receiver-readout">
+            <span class="readout-label">Current state</span>
+            <strong id="cast-state">Unavailable</strong>
+            <span id="cast-detail">No active receiver</span>
+          </div>
+          <div class="transport" aria-label="Playback controls">
+            <button class="control-button primary" id="rotation-toggle" type="button">
+              <span class="button-mark">Ⅱ</span><span>Pause rotation</span>
+            </button>
+            <button class="control-button" id="next-button" type="button">
+              <span class="button-mark">→</span><span>Next photo</span>
+            </button>
+            <button class="control-button" id="reconnect-button" type="button">
+              <span class="button-mark">↻</span><span>Reconnect</span>
+            </button>
+            <button class="control-button danger" id="stop-button" type="button">
+              <span class="button-mark">■</span><span>Stop cast</span>
+            </button>
+          </div>
+          <p class="safety-line">Next and stop unlock only for freshly verified service-owned media.</p>
+        </div>
+      </section>
+
+      <section class="history-section" aria-labelledby="history-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Contact sheet</p>
+            <h2 id="history-title">Recently on screen</h2>
+          </div>
+          <span class="history-count" id="history-count">0 / 10</span>
+        </div>
+        <div class="contact-sheet" id="history-list" aria-live="polite">
+          <p class="empty-state">No confirmed photos yet.</p>
+        </div>
+      </section>
+
+      <section class="settings-section" aria-labelledby="settings-title">
+        <div class="settings-intro">
+          <p class="eyebrow">Service settings</p>
+          <h2 id="settings-title">Tune the rotation.</h2>
+          <p>Changes are validated as a whole. If activation fails, the current service stays in place.</p>
+          <div class="settings-actions">
+            <button class="text-button" id="reset-button" type="button">Reset draft</button>
+            <button class="save-button" id="save-button" type="submit" form="settings-form">Apply settings</button>
+          </div>
+        </div>
+
+        <form id="settings-form" class="settings-form">
+          <fieldset>
+            <legend><span>01</span> Immich</legend>
+            <label>Server URL<input name="immich.url" type="url" required autocomplete="url"></label>
+            <label>API key<input name="immich.api_key" type="password" autocomplete="new-password" placeholder="Leave blank to keep current key"></label>
+            <p class="field-hint" id="key-status">No API key configured.</p>
+            <div class="field-pair">
+              <label>Request timeout<input name="immich.request_timeout" type="number" min="0.1" step="0.1" required></label>
+              <label>Retry attempts<input name="immich.retry_attempts" type="number" min="1" step="1" required></label>
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend><span>02</span> Chromecast</legend>
+            <label>Receiver
+              <select name="chromecast.uuid" id="chromecast-select" required>
+                <option value="">Choose a receiver</option>
+              </select>
+            </label>
+            <button class="inline-button" id="discover-button" type="button">Scan the network</button>
+            <div class="field-pair">
+              <label>Discovery timeout<input name="chromecast.discovery_timeout" type="number" min="0.1" step="0.1" required></label>
+              <label>Load timeout<input name="chromecast.load_timeout" type="number" min="0.1" step="0.1" required></label>
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend><span>03</span> Image relay</legend>
+            <div class="field-pair">
+              <label>Bind host<input name="relay.bind_host" required></label>
+              <label>Port<input name="relay.port" type="number" min="1" max="65535" step="1" required></label>
+            </div>
+            <label>Advertised LAN host<input name="relay.advertised_host" required></label>
+            <div class="field-pair">
+              <label>Token lifetime<input name="relay.token_lifetime" type="number" min="1" max="600" step="0.1" required></label>
+              <label>Concurrent requests<input name="relay.max_concurrent" type="number" min="1" step="1" required></label>
+            </div>
+            <label>Maximum image bytes<input name="relay.max_response_bytes" type="number" min="1" step="1" required></label>
+          </fieldset>
+
+          <fieldset>
+            <legend><span>04</span> Rotation</legend>
+            <div class="field-pair">
+              <label>Photo interval<input name="rotation.interval" type="number" min="0.1" step="0.1" required></label>
+              <label>Idle debounce<input name="rotation.idle_debounce" type="number" min="0.1" step="0.1" required></label>
+            </div>
+            <div class="field-pair">
+              <label>Failure cooldown<input name="rotation.cooldown" type="number" min="0.1" step="0.1" required></label>
+              <label>Repeat exclusion<input name="rotation.recent_history" type="number" min="1" step="1" required></label>
+            </div>
+            <label>Candidate batch<input name="rotation.candidate_batch" type="number" min="1" max="1000" step="1" required></label>
+          </fieldset>
+
+          <fieldset>
+            <legend><span>05</span> Service</legend>
+            <label>Installation ID file<input name="service.installation_id_file" required></label>
+            <label>Log level
+              <select name="service.log_level">
+                <option>DEBUG</option><option>INFO</option><option>WARNING</option><option>ERROR</option>
+              </select>
+            </label>
+          </fieldset>
+        </form>
+      </section>
+    </main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>

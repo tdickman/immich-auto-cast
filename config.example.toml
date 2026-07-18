@@ -1,0 +1,30 @@
+[immich]
+url = "https://immich.example.test"
+api_key = "replace-me-or-set-CAST_IMMICH_API_KEY"
+request_timeout = 15.0
+retry_attempts = 3
+
+[chromecast]
+uuid = "00000000-0000-4000-8000-000000000000"
+discovery_timeout = 10.0
+load_timeout = 15.0
+
+[relay]
+bind_host = "0.0.0.0"
+port = 8787
+advertised_host = "192.168.1.10"
+token_lifetime = 120.0
+max_response_bytes = 25000000
+max_concurrent = 4
+
+[rotation]
+interval = 60.0
+idle_debounce = 3.0
+cooldown = 15.0
+recent_history = 25
+candidate_batch = 50
+
+[service]
+installation_id_file = "installation-id"
+log_level = "INFO"
+revision = 0

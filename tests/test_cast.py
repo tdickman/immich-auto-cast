@@ -1,0 +1,235 @@
+from __future__ import annotations
+
+import asyncio
+import threading
+from types import SimpleNamespace
+from typing import Any
+from uuid import UUID
+
+import pytest
+
+from cast_immich.cast import (
+    CastAdapter,
+    DiscoveredChromecast,
+    DiscoveryError,
+    EventKind,
+    _Listeners,
+    discover_chromecasts,
+)
+from cast_immich.config import ChromecastSettings
+
+
+class MediaController:
+    def __init__(self) -> None:
+        self.calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+    def play_media(self, *args: Any, **kwargs: Any) -> None:
+        self.calls.append((args, kwargs))
+
+    def stop(self, **kwargs: Any) -> None:
+        self.calls.append((("stop",), kwargs))
+
+
+@pytest.mark.asyncio
+async def test_load_uses_buffered_media_and_custom_ownership_data() -> None:
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    adapter = CastAdapter(ChromecastSettings(UUID(int=1), 1, 1), queue)
+    adapter._loop = asyncio.get_running_loop()
+    adapter._generation = 4
+    controller = MediaController()
+    adapter._cast = SimpleNamespace(media_controller=controller)
+
+    sent = await adapter.load_image(4, "http://lan/image/token", "image/webp", {"loadId": "x"})
+
+    assert sent is True
+    args, kwargs = controller.calls[0]
+    assert args == ("http://lan/image/token", "image/webp")
+    assert kwargs["stream_type"] == "BUFFERED"
+    assert kwargs["media_info"] == {"customData": {"loadId": "x"}}
+    assert await adapter.load_image(3, "http://bad", "image/jpeg", {}) is False
+
+
+@pytest.mark.asyncio
+async def test_listener_normalizes_status_and_tags_generation() -> None:
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    adapter = CastAdapter(ChromecastSettings(UUID(int=1), 1, 1), queue)
+    adapter._loop = asyncio.get_running_loop()
+    listener = _Listeners(adapter, 7)
+    adapter._listeners = listener
+    listener.new_media_status(
+        SimpleNamespace(
+            player_state="PLAYING",
+            content_id="http://lan/image/token",
+            media_session_id=9,
+            media_custom_data={"schema": "cast-immich/v1"},
+        )
+    )
+    event = await asyncio.wait_for(queue.get(), 1)
+    assert event.kind is EventKind.MEDIA
+    assert event.generation == 7
+    assert event.media.player_state == "PLAYING"
+
+
+@pytest.mark.asyncio
+async def test_load_failure_is_an_event_not_an_automatic_retry() -> None:
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    adapter = CastAdapter(ChromecastSettings(UUID(int=1), 1, 1), queue)
+    adapter._loop = asyncio.get_running_loop()
+    listener = _Listeners(adapter, 2)
+    adapter._listeners = listener
+    listener.load_media_failed(5, 104)
+    event = await asyncio.wait_for(queue.get(), 1)
+    assert event.kind is EventKind.LOAD_FAILED
+    assert event.detail == "cast_error_104"
+
+
+@pytest.mark.asyncio
+async def test_cancelled_discovery_cleans_up_late_browser(monkeypatch: pytest.MonkeyPatch) -> None:
+    release = threading.Event()
+    stopped = threading.Event()
+    browser = SimpleNamespace(stop_discovery=stopped.set)
+
+    def discover(**_kwargs: Any) -> tuple[list[Any], Any]:
+        release.wait(timeout=1)
+        return [], browser
+
+    monkeypatch.setattr("cast_immich.cast.pychromecast.get_listed_chromecasts", discover)
+    adapter = CastAdapter(ChromecastSettings(UUID(int=1), 1, 1), asyncio.Queue())
+    task = asyncio.create_task(adapter._discover())
+    await asyncio.sleep(0)
+    task.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert stopped.is_set()
+
+
+@pytest.mark.asyncio
+async def test_broad_discovery_deduplicates_uuids_and_closes_browser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stopped = threading.Event()
+    duplicate_uuid = UUID(int=1)
+    devices = [
+        SimpleNamespace(uuid=duplicate_uuid, friendly_name="Living Room"),
+        SimpleNamespace(uuid=duplicate_uuid, friendly_name="Duplicate"),
+        SimpleNamespace(uuid=UUID(int=2), friendly_name="Living Room"),
+    ]
+    browser = SimpleNamespace(stop_discovery=stopped.set)
+    monkeypatch.setattr(
+        "cast_immich.cast._discover_chromecasts",
+        lambda **_kwargs: (devices, browser),
+    )
+
+    result = await discover_chromecasts(1)
+
+    assert result == (
+        DiscoveredChromecast("Duplicate", UUID(int=1)),
+        DiscoveredChromecast("Living Room", UUID(int=2)),
+    )
+    assert stopped.is_set()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_broad_discovery_closes_late_browser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = threading.Event()
+    stopped = threading.Event()
+    browser = SimpleNamespace(stop_discovery=stopped.set)
+
+    def discover(**_kwargs: Any) -> tuple[list[Any], Any]:
+        release.wait(timeout=1)
+        return [], browser
+
+    monkeypatch.setattr("cast_immich.cast._discover_chromecasts", discover)
+    task = asyncio.create_task(discover_chromecasts(1))
+    await asyncio.sleep(0)
+    task.cancel()
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert stopped.is_set()
+
+
+@pytest.mark.asyncio
+async def test_broad_discovery_exception_returns_empty_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def discover(**_kwargs: Any) -> tuple[list[Any], Any]:
+        raise RuntimeError("discovery failed")
+
+    monkeypatch.setattr("cast_immich.cast._discover_chromecasts", discover)
+
+    with pytest.raises(DiscoveryError):
+        await discover_chromecasts(1)
+
+
+@pytest.mark.asyncio
+async def test_broad_discovery_does_not_touch_active_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    active_cast = SimpleNamespace()
+    adapter = CastAdapter(ChromecastSettings(UUID(int=1), 1, 1), asyncio.Queue())
+    adapter._generation = 5
+    adapter._cast = active_cast
+    browser = SimpleNamespace(stop_discovery=lambda: None)
+    monkeypatch.setattr(
+        "cast_immich.cast._discover_chromecasts",
+        lambda **_kwargs: ([], browser),
+    )
+
+    assert await discover_chromecasts(1) == ()
+    assert adapter._cast is active_cast
+    assert adapter.generation == 5
+
+
+@pytest.mark.asyncio
+async def test_reconnect_coalesces_disposal_and_suppresses_late_events() -> None:
+    adapter = CastAdapter(ChromecastSettings(UUID(int=1), 1, 1), asyncio.Queue())
+    adapter._loop = asyncio.get_running_loop()
+    adapter._task = asyncio.create_task(asyncio.Event().wait())
+    adapter._generation = 3
+    listener = _Listeners(adapter, 3)
+    adapter._listeners = listener
+    disconnect_started = threading.Event()
+    release = threading.Event()
+    disconnect_calls = 0
+
+    def disconnect(**_kwargs: Any) -> None:
+        nonlocal disconnect_calls
+        disconnect_calls += 1
+        disconnect_started.set()
+        release.wait(timeout=1)
+
+    adapter._cast = SimpleNamespace(disconnect=disconnect)
+    first = asyncio.create_task(adapter.reconnect())
+    await asyncio.to_thread(disconnect_started.wait, 1)
+    second = asyncio.create_task(adapter.reconnect())
+    release.set()
+    await asyncio.gather(first, second)
+    listener.new_connection_status(SimpleNamespace(status="CONNECTED"))
+
+    assert disconnect_calls == 1
+    assert adapter._cast is None
+    event = adapter._queue.get_nowait()
+    assert event.kind is EventKind.DISCONNECTED
+    assert event.generation == 3
+    assert adapter._queue.empty()
+    adapter._task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await adapter._task
+
+
+@pytest.mark.asyncio
+async def test_stop_media_is_generation_scoped() -> None:
+    adapter = CastAdapter(ChromecastSettings(UUID(int=1), 1, 2), asyncio.Queue())
+    adapter._generation = 4
+    controller = MediaController()
+    adapter._cast = SimpleNamespace(media_controller=controller)
+
+    assert await adapter.stop_media(3) is False
+    assert controller.calls == []
+    assert await adapter.stop_media(4) is True
+    assert controller.calls == [(("stop",), {"timeout": 2})]

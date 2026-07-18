@@ -1,0 +1,412 @@
+from __future__ import annotations
+
+import copy
+import ipaddress
+import secrets
+from dataclasses import dataclass
+from datetime import datetime
+from importlib.resources import files
+from typing import Any
+from urllib.parse import urlsplit
+
+from aiohttp import web
+
+from .cast import DiscoveryError
+from .config import default_form_values
+from .coordinator import Command, CommandResult, CoordinatorSnapshot
+from .history import DisplayRecord, HistoryError
+from .immich import AssetUnavailable, ImmichError
+from .relay import ALLOWED_IMAGE_TYPES
+from .runtime import ApplyStatus, ConfigSnapshot, RuntimeSnapshot, RuntimeSupervisor
+
+CLIENT_MAX_SIZE = 64 * 1024
+MUTATION_HEADER = "X-Cast-Immich-Request"
+CSRF_HEADER = "X-CSRF-Token"
+SECURITY_HEADERS = {
+    "Cache-Control": "no-store",
+    "Content-Security-Policy": (
+        "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; "
+        "form-action 'self'; object-src 'none'; img-src 'self' data:"
+    ),
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+}
+
+
+def create_management_app(
+    supervisor: RuntimeSupervisor,
+    *,
+    csrf_token: str | None = None,
+    allowed_hosts: set[str] | None = None,
+) -> web.Application:
+    token = csrf_token or secrets.token_urlsafe(32)
+
+    @web.middleware
+    async def security_headers(request: web.Request, handler: Any) -> web.StreamResponse:
+        if _request_origin(request, allowed_hosts) is None:
+            response = web.json_response(
+                {"outcome": "invalid_host", "error": "management host is not allowed"},
+                status=421,
+            )
+        else:
+            try:
+                response = await handler(request)
+            except web.HTTPException as error:
+                headers = {
+                    name: value
+                    for name, value in error.headers.items()
+                    if name.lower() not in {"content-length", "content-type"}
+                }
+                response = web.json_response(
+                    {"outcome": "http_error", "error": error.reason},
+                    status=error.status,
+                    headers=headers,
+                )
+        if not isinstance(response, web.StreamResponse):
+            raise TypeError("management handler returned an invalid response")
+        response.headers.update(SECURITY_HEADERS)
+        return response
+
+    app = web.Application(client_max_size=CLIENT_MAX_SIZE, middlewares=[security_headers])
+
+    async def index(_request: web.Request) -> web.Response:
+        return _static_response("index.html", "text/html")
+
+    async def script(_request: web.Request) -> web.Response:
+        return _static_response("app.js", "text/javascript")
+
+    async def stylesheet(_request: web.Request) -> web.Response:
+        return _static_response("styles.css", "text/css")
+
+    async def status(request: web.Request) -> web.Response:
+        payload = _runtime_json(supervisor.snapshot)
+        if _origin_is_absent_or_same(request, allowed_hosts):
+            payload["csrf_token"] = token
+        return web.json_response(payload)
+
+    async def config(request: web.Request) -> web.Response:
+        payload = _config_json(supervisor.config_snapshot)
+        if _origin_is_absent_or_same(request, allowed_hosts):
+            payload["csrf_token"] = token
+        return web.json_response(payload)
+
+    async def save(request: web.Request) -> web.Response:
+        failure = _mutation_failure(request, token, allowed_hosts)
+        if failure is not None:
+            return failure
+        body = await _json_object(request)
+        if isinstance(body, web.Response):
+            return body
+        revision = body.get("revision")
+        values = body.get("config")
+        if (
+            isinstance(revision, bool)
+            or not isinstance(revision, int)
+            or not isinstance(values, dict)
+        ):
+            return _error(400, "invalid_request", "revision and config are required")
+        result = await supervisor.apply_settings(values, expected_revision=revision)
+        payload: dict[str, Any] = {
+            "outcome": result.status.value,
+            "status": _runtime_json(result.snapshot),
+            "config": _config_json(supervisor.config_snapshot),
+        }
+        if result.error is not None:
+            payload["error"] = result.error
+        if result.status is ApplyStatus.INVALID:
+            payload["draft"] = _safe_draft(values)
+        status_code = {
+            ApplyStatus.APPLIED: 200,
+            ApplyStatus.CONFLICT: 409,
+            ApplyStatus.INVALID: 422,
+            ApplyStatus.FAILED: 503,
+            ApplyStatus.CLOSED: 503,
+        }[result.status]
+        return web.json_response(payload, status=status_code)
+
+    async def discovery(request: web.Request) -> web.Response:
+        failure = _mutation_failure(request, token, allowed_hosts)
+        if failure is not None:
+            return failure
+        body = await _json_object(request)
+        if isinstance(body, web.Response):
+            return body
+        try:
+            devices = await supervisor.discover()
+        except DiscoveryError:
+            return _error(503, "discovery_failed", "Chromecast discovery failed")
+        return web.json_response(
+            {
+                "outcome": "completed",
+                "devices": [
+                    {"friendly_name": item.friendly_name, "uuid": str(item.uuid)}
+                    for item in devices
+                ],
+            }
+        )
+
+    async def control(request: web.Request) -> web.Response:
+        failure = _mutation_failure(request, token, allowed_hosts)
+        if failure is not None:
+            return failure
+        body = await _json_object(request)
+        if isinstance(body, web.Response):
+            return body
+        request_id = body.get("request_id")
+        if not isinstance(request_id, str) or not request_id.strip():
+            return _error(400, "invalid_request", "request_id is required")
+        try:
+            command = Command(request.match_info["command"])
+        except ValueError:
+            raise web.HTTPNotFound from None
+        outcome = await supervisor.command(command, request_id)
+        code = 503 if outcome is CommandResult.FAILED else 200
+        return web.json_response(
+            {
+                "outcome": outcome.value,
+                "command": command.value,
+                "request_id": request_id,
+                "status": _runtime_json(supervisor.snapshot),
+            },
+            status=code,
+        )
+
+    async def reconnect(request: web.Request) -> web.Response:
+        failure = _mutation_failure(request, token, allowed_hosts)
+        if failure is not None:
+            return failure
+        body = await _json_object(request)
+        if isinstance(body, web.Response):
+            return body
+        if body:
+            return _error(400, "invalid_request", "request body must be empty")
+        available = await supervisor.reconnect()
+        return web.json_response(
+            {"outcome": "accepted" if available else "unavailable"},
+            status=202 if available else 503,
+        )
+
+    async def history(_request: web.Request) -> web.Response:
+        try:
+            state = await supervisor.history_snapshot()
+        except HistoryError:
+            return _error(503, "history_unavailable", "history is unavailable")
+        return web.json_response(
+            {
+                "rotation_enabled": state.rotation_enabled,
+                "records": [_record_json(record) for record in state.records],
+            }
+        )
+
+    async def thumbnail(request: web.Request) -> web.Response:
+        try:
+            preview = await supervisor.thumbnail(request.match_info["event_id"])
+        except AssetUnavailable:
+            return _error(404, "thumbnail_unavailable", "thumbnail is unavailable")
+        except HistoryError:
+            return _error(503, "history_unavailable", "thumbnail is unavailable")
+        except ImmichError:
+            return _error(502, "thumbnail_upstream_error", "thumbnail is unavailable")
+        if preview.content_type not in ALLOWED_IMAGE_TYPES:
+            return _error(502, "thumbnail_invalid", "thumbnail is unavailable")
+        return web.Response(body=preview.body, content_type=preview.content_type)
+
+    app.router.add_get("/", index)
+    app.router.add_get("/app.js", script)
+    app.router.add_get("/styles.css", stylesheet)
+    app.router.add_get("/api/status", status)
+    app.router.add_get("/api/config", config)
+    app.router.add_put("/api/config", save)
+    app.router.add_post("/api/discovery", discovery)
+    app.router.add_post("/api/controls/{command}", control)
+    app.router.add_post("/api/reconnect", reconnect)
+    app.router.add_get("/api/history", history)
+    app.router.add_get("/api/history/{event_id}/thumbnail", thumbnail)
+    return app
+
+
+@dataclass(slots=True)
+class ManagementServer:
+    supervisor: RuntimeSupervisor
+    host: str = "127.0.0.1"
+    port: int = 8080
+    _runner: web.AppRunner | None = None
+
+    @property
+    def app(self) -> web.Application:
+        runner = self._runner
+        if runner is None:
+            raise RuntimeError("management server has not been started")
+        return runner.app
+
+    async def start(self) -> None:
+        if self._runner is not None:
+            return
+        allowed = None if self.host in {"0.0.0.0", "::"} else {self.host}
+        if self.host in {"127.0.0.1", "::1", "localhost"}:
+            allowed = {"127.0.0.1", "::1", "localhost"}
+        runner = web.AppRunner(
+            create_management_app(self.supervisor, allowed_hosts=allowed), access_log=None
+        )
+        await runner.setup()
+        try:
+            await web.TCPSite(runner, self.host, self.port).start()
+        except BaseException:
+            await runner.cleanup()
+            raise
+        self._runner = runner
+
+    async def close(self) -> None:
+        runner, self._runner = self._runner, None
+        if runner is not None:
+            await runner.cleanup()
+
+
+def _mutation_failure(
+    request: web.Request, csrf_token: str, allowed_hosts: set[str] | None
+) -> web.Response | None:
+    if not _origin_is_same(request, allowed_hosts):
+        return _error(403, "invalid_origin", "same-origin request required")
+    if request.content_type != "application/json":
+        return _error(415, "invalid_content_type", "application/json required")
+    if request.headers.get(MUTATION_HEADER) != "1":
+        return _error(403, "invalid_request_header", "request header required")
+    if not secrets.compare_digest(request.headers.get(CSRF_HEADER, ""), csrf_token):
+        return _error(403, "invalid_csrf", "valid CSRF token required")
+    return None
+
+
+def _request_origin(request: web.Request, allowed_hosts: set[str] | None) -> str | None:
+    try:
+        host = request.host
+    except ValueError:
+        return None
+    if not host or any(character in host for character in "/\\@"):
+        return None
+    hostname = urlsplit(f"//{host}").hostname
+    if hostname is None or not _host_allowed(hostname, allowed_hosts):
+        return None
+    return f"{request.scheme}://{host}"
+
+
+def _origin_is_same(request: web.Request, allowed_hosts: set[str] | None) -> bool:
+    origin = request.headers.get("Origin")
+    expected = _request_origin(request, allowed_hosts)
+    if origin is None or expected is None or origin != expected:
+        return False
+    parsed = urlsplit(origin)
+    return bool(
+        parsed.scheme
+        and parsed.netloc
+        and not parsed.path
+        and not parsed.query
+        and not parsed.fragment
+    )
+
+
+def _origin_is_absent_or_same(request: web.Request, allowed_hosts: set[str] | None) -> bool:
+    return (
+        "Origin" not in request.headers and _request_origin(request, allowed_hosts) is not None
+    ) or _origin_is_same(request, allowed_hosts)
+
+
+def _host_allowed(hostname: str, allowed_hosts: set[str] | None) -> bool:
+    normalized = hostname.rstrip(".").lower()
+    if allowed_hosts is not None:
+        return normalized in {host.rstrip(".").lower() for host in allowed_hosts}
+    if normalized == "localhost":
+        return True
+    try:
+        address = ipaddress.ip_address(normalized)
+    except ValueError:
+        return False
+    return address.is_private or address.is_loopback or address.is_link_local
+
+
+async def _json_object(request: web.Request) -> dict[str, Any] | web.Response:
+    try:
+        value = await request.json()
+    except (ValueError, UnicodeError):
+        return _error(400, "invalid_json", "request body must be a JSON object")
+    if not isinstance(value, dict):
+        return _error(400, "invalid_json", "request body must be a JSON object")
+    return value
+
+
+def _runtime_json(snapshot: RuntimeSnapshot) -> dict[str, Any]:
+    coordinator = snapshot.coordinator
+    active = snapshot.mode.value == "active"
+    owned = active and coordinator is not None and coordinator.state.value == "owned"
+    rotation_enabled = coordinator.rotation_enabled if coordinator is not None else True
+    return {
+        "mode": snapshot.mode.value,
+        "revision": snapshot.revision,
+        "generation": snapshot.generation,
+        "coordinator": _coordinator_json(coordinator),
+        "error": snapshot.error,
+        "available_actions": {
+            "pause": active and rotation_enabled,
+            "enable": active and not rotation_enabled,
+            "next": owned,
+            "stop": owned,
+            "reconnect": active,
+        },
+    }
+
+
+def _coordinator_json(snapshot: CoordinatorSnapshot | None) -> dict[str, Any] | None:
+    if snapshot is None:
+        return None
+    return {
+        "state": snapshot.state.value,
+        "rotation_enabled": snapshot.rotation_enabled,
+        "generation": snapshot.generation,
+        "error": snapshot.error,
+        "last_display_event_id": (
+            snapshot.last_display.event_id if snapshot.last_display is not None else None
+        ),
+    }
+
+
+def _config_json(snapshot: ConfigSnapshot) -> dict[str, Any]:
+    return {
+        "revision": snapshot.revision,
+        "values": copy.deepcopy(snapshot.form_values),
+        "api_key_configured": snapshot.api_key_configured,
+        "api_key_source": snapshot.api_key_source.value if snapshot.api_key_source else None,
+    }
+
+
+def _safe_draft(values: dict[str, Any]) -> dict[str, Any]:
+    draft: dict[str, Any] = {}
+    schema = default_form_values()
+    for section, fields in schema.items():
+        submitted = values.get(section)
+        if not isinstance(submitted, dict):
+            continue
+        draft[section] = {key: copy.deepcopy(submitted[key]) for key in fields if key in submitted}
+    draft.setdefault("immich", {})["api_key"] = ""
+    return draft
+
+
+def _record_json(record: DisplayRecord) -> dict[str, str]:
+    return {
+        "event_id": record.event_id,
+        "asset_id": record.asset_id,
+        "confirmed_at": _isoformat(record.confirmed_at),
+        "thumbnail_url": f"/api/history/{record.event_id}/thumbnail",
+    }
+
+
+def _isoformat(value: datetime) -> str:
+    return value.isoformat().replace("+00:00", "Z")
+
+
+def _error(status: int, outcome: str, message: str) -> web.Response:
+    return web.json_response({"outcome": outcome, "error": message}, status=status)
+
+
+def _static_response(name: str, content_type: str) -> web.Response:
+    body = files("cast_immich").joinpath("static", name).read_bytes()
+    return web.Response(body=body, content_type=content_type)
