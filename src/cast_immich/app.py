@@ -96,6 +96,9 @@ async def run_from_path(
                 installed_signals.append(signum)
 
     supervisor = RuntimeSupervisor(path)
+    configure_dashboard = getattr(supervisor, "set_dashboard_port", None)
+    if configure_dashboard is not None:
+        configure_dashboard(web_port)
     management = ManagementServer(supervisor, web_host, web_port)
     stop_task: asyncio.Task[bool] | None = None
     failure_task: asyncio.Task[None] | None = None

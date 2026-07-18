@@ -265,6 +265,8 @@ async def test_dashboard_assets_expose_complete_operator_interface(
     assert 'else if (kind === "video") applySource' not in javascript
     assert 'outputField("Maximum video seconds", "video_max_duration"' in javascript
     assert 'outputField("Mute videos", "video_muted"' in javascript
+    assert 'outputField("Show web interface QR code", "show_web_qr"' in javascript
+    assert 'control.checked = value ?? false' in javascript
     assert 'id="reconnect-button"' not in html
     assert "Stop cast" in html
     assert "Disable autocast" in html

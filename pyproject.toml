@@ -8,6 +8,7 @@ dependencies = [
   "aiohttp>=3.12,<4",
   "pillow>=11,<13",
   "pychromecast==14.0.10",
+  "qrcode>=8,<9",
 ]
 
 [project.scripts]

@@ -76,6 +76,7 @@ class RotationSettings:
     autocast_delay: float = 30.0
     video_max_duration: float = 30.0
     video_muted: bool = True
+    show_web_qr: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,6 +153,7 @@ def default_form_values() -> dict[str, Any]:
                 "autocast_delay": 30,
                 "video_max_duration": 30,
                 "video_muted": True,
+                "show_web_qr": False,
             }
         ],
         "relay": {
@@ -378,6 +380,7 @@ def _parse_candidate(
                         )
                     ),
                     _boolean(output.get("video_muted", True), f"{section}.video_muted"),
+                    _boolean(output.get("show_web_qr", False), f"{section}.show_web_qr"),
                 ),
             )
         )
@@ -452,6 +455,7 @@ def _form_values(settings: Settings, path: Path) -> dict[str, Any]:
                 "autocast_delay": output.rotation.autocast_delay,
                 "video_max_duration": output.rotation.video_max_duration,
                 "video_muted": output.rotation.video_muted,
+                "show_web_qr": output.rotation.show_web_qr,
             }
             for output in settings.outputs
         ],
@@ -536,6 +540,7 @@ def _serialize_configuration(
         "candidate_batch",
         "video_max_duration",
         "video_muted",
+        "show_web_qr",
     )
     for output in values["outputs"]:
         lines.append("[[outputs]]")

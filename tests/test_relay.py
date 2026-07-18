@@ -190,6 +190,28 @@ async def test_date_is_drawn_beneath_location() -> None:
 
 
 @pytest.mark.asyncio
+async def test_web_interface_qr_is_drawn_only_when_enabled() -> None:
+    body = image_bytes((640, 360))
+    relay = ImageRelay(
+        settings(), Source(Preview(body, "image/png")), dashboard_url="http://192.168.1.5:8080/"
+    )
+
+    await relay.mint(ASSET_ID)
+    await relay.mint(ASSET_ID, show_web_qr=True)
+
+    plain_preview, qr_preview = [capability.preview for capability in relay._tokens.values()]
+    with (
+        Image.open(io.BytesIO(plain_preview.body)) as plain_image,
+        Image.open(io.BytesIO(qr_preview.body)) as qr_image,
+    ):
+        difference = ImageChops.difference(plain_image, qr_image)
+        assert difference.crop((0, 500, 200, 720)).getbbox() is not None
+        assert difference.crop((200, 0, 1280, 720)).getbbox() is None
+
+    assert relay._source.calls == 2
+
+
+@pytest.mark.asyncio
 async def test_portrait_metadata_is_drawn_in_screen_letterbox() -> None:
     class MetadataSource(Source):
         async def fetch_metadata(self, asset_id: UUID) -> tuple[str | None, str | None]:

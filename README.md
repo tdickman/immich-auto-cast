@@ -77,6 +77,7 @@ The first valid configuration atomically creates `installation-id` beside the co
 - `outputs.idle_debounce`: short status-stabilization setting retained for configuration compatibility.
 - `outputs.load_timeout`: time allowed for media status to confirm a load.
 - `outputs.video_max_duration` and `outputs.video_muted`: reserved video settings. Video selection is temporarily disabled; see [`docs/video-support.md`](docs/video-support.md).
+- `outputs.show_web_qr`: overlays a small bottom-left QR code linking to the dashboard. Disabled by default.
 
 The dashboard validates and atomically rewrites the complete TOML configuration. Concurrent stale saves are rejected. Legacy `[chromecast]` plus `[rotation]` files load as a single `default` output without being rewritten until a save. New saves always use `[[outputs]]`. A blank API-key field preserves the file key. When `CAST_IMMICH_API_KEY` is set, it remains authoritative and browser replacement is disabled.
 

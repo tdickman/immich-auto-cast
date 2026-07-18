@@ -49,6 +49,7 @@ def test_loads_normalized_settings_and_environment_secret(tmp_path: Path) -> Non
     assert settings.service.installation_id_file == tmp_path / "identity"
     assert settings.outputs[0].rotation.video_max_duration == 30
     assert settings.outputs[0].rotation.video_muted is True
+    assert settings.outputs[0].rotation.show_web_qr is False
 
 
 def test_rejects_non_boolean_video_muting(tmp_path: Path) -> None:
@@ -152,6 +153,7 @@ def test_editable_settings_round_trip_every_value_and_mask_key(tmp_path: Path) -
         cooldown=12.0,
         recent_history=17,
         candidate_batch=31,
+        show_web_qr=True,
     )
     form["service"]["log_level"] = "debug"
 
@@ -163,6 +165,9 @@ def test_editable_settings_round_trip_every_value_and_mask_key(tmp_path: Path) -
     assert reloaded.settings.immich.url == "https://new.example"
     assert reloaded.settings.immich.api_key == "new-origin-secret"
     assert reloaded.settings.service.log_level == "DEBUG"
+    assert reloaded.settings.outputs[0].rotation.show_web_qr is True
+    assert reloaded.form_values["outputs"][0]["show_web_qr"] is True
+    assert "show_web_qr = true" in path.read_text(encoding="utf-8")
     assert "[[outputs]]" in path.read_text(encoding="utf-8")
     assert "[chromecast]" not in path.read_text(encoding="utf-8")
     assert path.stat().st_mode & 0o777 == 0o600

@@ -32,14 +32,17 @@
         <button class="save-button" id="open-settings-button" type="button">Open settings</button>
       </section>
 
-      <div id="selected-workspace" hidden aria-labelledby="workspace-output-name">
-      <section class="control-stage" aria-labelledby="workspace-output-name">
-        <div class="stage-copy">
-          <h1 id="workspace-output-name">Output</h1>
-          <p class="stage-note" id="ownership-note">Connecting to your receiver...</p>
-        </div>
-
-        <div class="control-console">
+      <div id="selected-workspace" hidden>
+      <section class="playback-gallery" aria-label="Media playback">
+        <div class="now-panel" aria-labelledby="current-title">
+          <h1 id="current-title">Now showing</h1>
+          <div class="now-layout">
+            <div class="now-content" id="current-list" aria-live="polite">
+              <p class="empty-state">No media is currently casting.</p>
+            </div>
+            <div class="now-controls">
+              <p class="stage-note" id="ownership-note">Connecting to your receiver...</p>
+              <div class="control-console">
           <div class="receiver-readout">
             <div class="autocast-countdown" id="autocast-status" role="timer" hidden>
               <span class="countdown-dot" aria-hidden="true"></span>
@@ -97,14 +100,8 @@
               <span class="button-mark">■</span><span>Stop cast</span>
             </button>
           </div>
-        </div>
-      </section>
-
-      <section class="playback-gallery" aria-label="Media playback">
-        <div class="now-panel" aria-labelledby="current-title">
-          <h2 id="current-title">Now showing</h2>
-          <div class="now-content" id="current-list" aria-live="polite">
-            <p class="empty-state">No media is currently casting.</p>
+              </div>
+            </div>
           </div>
           <div class="next-photo-countdown" id="next-photo-countdown" role="timer" aria-label="Next photo countdown" hidden>
             <span aria-hidden="true"></span>

@@ -173,7 +173,6 @@ function renderSelectedWorkspace() {
   const healthMessage = coordinator.health_message
     ? `${coordinator.health_message}${typeof retry === "number" ? ` in ${Math.ceil(retry)}s` : ""}`
     : "";
-  document.querySelector("#workspace-output-name").textContent = output.name || output.id;
   document.querySelector("#ownership-note").textContent = state.disconnectedSince !== null
     ? "Dashboard connection lost. Displayed information is stale; reconnecting automatically."
     : state.error || coordinator.error || healthMessage || (
@@ -449,26 +448,6 @@ function renderHistory(outputId) {
     const article = document.createElement("article");
     article.className = "current-record";
     article.append(photoLink(outputId, record, "Currently displayed photo", "current-media"));
-    const details = document.createElement("div");
-    details.className = "current-details";
-    const status = document.createElement("strong");
-    status.textContent = "Casting now";
-    const time = document.createElement("time");
-    if (record.confirmed_at) {
-      time.dateTime = record.confirmed_at;
-      time.title = new Date(record.confirmed_at).toLocaleString();
-      time.textContent = relativeTime(record.confirmed_at);
-    } else time.textContent = "Waiting for display confirmation";
-    const asset = document.createElement("code");
-    asset.textContent = record.asset_id;
-    const view = document.createElement("a");
-    view.className = "view-photo";
-    view.href = immichPhotoUrl(record.asset_id);
-    view.target = "_blank";
-    view.rel = "noopener noreferrer";
-    view.textContent = "View in Immich ↗";
-    details.append(status, time, asset, view);
-    article.append(details);
     return article;
   });
   renderGallery("#history-list", records, "No confirmed photos yet.", (record, index) => {
@@ -599,6 +578,10 @@ function outputField(labelText, field, value, options = {}) {
     control = document.createElement("input");
     control.type = "checkbox";
     control.checked = value ?? true;
+  } else if (field === "show_web_qr") {
+    control = document.createElement("input");
+    control.type = "checkbox";
+    control.checked = value ?? false;
   } else {
     control = document.createElement("input");
     if (outputNumberFields.has(field)) {
@@ -608,7 +591,7 @@ function outputField(labelText, field, value, options = {}) {
     }
     control.value = value ?? "";
   }
-  control.required = true;
+  control.required = control.type !== "checkbox";
   control.dataset.outputField = field;
   label.append(control);
   return label;
@@ -649,6 +632,7 @@ function makeOutputSettingsRow(output) {
     outputField("Autocast idle delay", "autocast_delay", output.autocast_delay),
     outputField("Maximum video seconds", "video_max_duration", output.video_max_duration),
     outputField("Mute videos", "video_muted", output.video_muted),
+    outputField("Show web interface QR code", "show_web_qr", output.show_web_qr),
   );
   advanced.append(summary, fields);
   row.append(heading, basics, advanced);
@@ -687,6 +671,7 @@ function outputFromTemplate(template, { id, name, uuid }) {
     autocast_delay: template.autocast_delay ?? 30,
     video_max_duration: template.video_max_duration ?? 30,
     video_muted: template.video_muted ?? true,
+    show_web_qr: template.show_web_qr ?? false,
   };
 }
 

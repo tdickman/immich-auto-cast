@@ -80,9 +80,11 @@ class Relay(Protocol):
 
     async def mint(self, asset_id: UUID) -> tuple[str, str]: ...
 
-    async def preload_media(self, asset: Asset) -> None: ...
+    async def preload_media(self, asset: Asset, *, show_web_qr: bool = False) -> None: ...
 
-    async def mint_media(self, asset: Asset) -> tuple[str, str]: ...
+    async def mint_media(
+        self, asset: Asset, *, show_web_qr: bool = False
+    ) -> tuple[str, str]: ...
 
     def confirm(self, url: str) -> None: ...
 
@@ -986,7 +988,10 @@ class Coordinator:
         try:
             preload_media = getattr(self._relay, "preload_media", None)
             if preload_media is not None:
-                await preload_media(asset)
+                if self._settings.show_web_qr:
+                    await preload_media(asset, show_web_qr=True)
+                else:
+                    await preload_media(asset)
             elif asset.media_type is MediaType.IMAGE:
                 await self._relay.preload(asset.id)
         except (asyncio.CancelledError, Exception) as error:
@@ -997,7 +1002,10 @@ class Coordinator:
     async def _mint(self, asset: Asset) -> tuple[str, str]:
         mint_media = getattr(self._relay, "mint_media", None)
         if mint_media is not None:
-            url, content_type = await mint_media(asset)
+            if self._settings.show_web_qr:
+                url, content_type = await mint_media(asset, show_web_qr=True)
+            else:
+                url, content_type = await mint_media(asset)
             return str(url), str(content_type)
         return await self._relay.mint(asset.id)
 

@@ -141,12 +141,21 @@ Discovery = Callable[[float], Awaitable[tuple[DiscoveredChromecast, ...]]]
 class ServiceGraph:
     """Dependency-ordered active service graph used by the production supervisor."""
 
-    def __init__(self, settings: Settings, history: HistoryStore) -> None:
+    def __init__(
+        self, settings: Settings, history: HistoryStore, *, dashboard_url: str | None = None
+    ) -> None:
         self._immich = ImmichClient(settings.immich)
         self._history = history
         self._thumbnail_max_bytes = settings.relay.max_response_bytes
+        if dashboard_url is None:
+            host = settings.relay.advertised_host
+            authority = f"[{host}]" if ":" in host else host
+            dashboard_url = f"http://{authority}:8080/"
         self._relay = ImageRelay(
-            settings.relay, self._immich, max_tokens=max(32, len(settings.outputs) * 12)
+            settings.relay,
+            self._immich,
+            max_tokens=max(32, len(settings.outputs) * 12),
+            dashboard_url=dashboard_url,
         )
         self._outputs: dict[str, _OutputRuntime] = {}
         for output in settings.outputs:
@@ -433,6 +442,22 @@ class RuntimeSupervisor:
         self._close_task: asyncio.Task[None] | None = None
         self._graph_monitor: asyncio.Task[None] | None = None
         self._failures: asyncio.Queue[BaseException] = asyncio.Queue(maxsize=1)
+
+    def set_dashboard_port(self, port: int) -> None:
+        """Set the externally reachable management port before activation."""
+        if self._started:
+            raise RuntimeError("dashboard port cannot change after startup")
+        if self._graph_factory is not ServiceGraph:
+            return
+
+        def graph_factory(settings: Settings, history: HistoryStore) -> ServiceGraph:
+            host = settings.relay.advertised_host
+            authority = f"[{host}]" if ":" in host else host
+            return ServiceGraph(
+                settings, history, dashboard_url=f"http://{authority}:{port}/"
+            )
+
+        self._graph_factory = graph_factory
 
     @property
     def history_store(self) -> HistoryStore:
