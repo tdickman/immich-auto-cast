@@ -641,7 +641,7 @@ function makeOutputSettingsRow(output) {
     outputField("Maximum video seconds", "video_max_duration", output.video_max_duration),
     outputField("Mute videos", "video_muted", output.video_muted),
     outputField("Show web interface QR code", "show_web_qr", output.show_web_qr),
-    outputField("QR code size (1-6)", "web_qr_size", output.web_qr_size, { min: "1", max: "6", step: "1" }),
+    outputField("QR code size (1-6)", "web_qr_size", output.web_qr_size, { min: "1", max: "6", step: "0.25" }),
     outputField("QR corner", "web_qr_position", output.web_qr_position),
     outputField("Horizontal inset", "web_qr_inset_x", output.web_qr_inset_x, { min: "0", max: "640", step: "1" }),
     outputField("Vertical inset", "web_qr_inset_y", output.web_qr_inset_y, { min: "0", max: "360", step: "1" }),

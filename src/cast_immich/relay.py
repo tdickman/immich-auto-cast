@@ -63,7 +63,7 @@ class Capability:
 
 @dataclass(frozen=True, slots=True)
 class QrPlacement:
-    size: int
+    size: float
     position: str
     inset_x: int
     inset_y: int
@@ -93,7 +93,7 @@ class ImageRelay:
             tuple[UUID, QrPlacement | None], asyncio.Task[Preview]
         ] = {}
         self._dashboard_url = dashboard_url
-        self._web_qrs: dict[int, Image.Image] = {}
+        self._web_qrs: dict[float, Image.Image] = {}
         self._semaphore = asyncio.Semaphore(settings.max_concurrent)
         self._stream_semaphore = asyncio.Semaphore(settings.max_concurrent)
         self._app = web.Application(client_max_size=1024)
@@ -133,7 +133,7 @@ class ImageRelay:
         asset: Asset | UUID,
         *,
         show_web_qr: bool = False,
-        web_qr_size: int = 1,
+        web_qr_size: float = 1,
         web_qr_position: str = "bottom-left",
         web_qr_inset_x: int = 36,
         web_qr_inset_y: int = 36,
@@ -157,7 +157,7 @@ class ImageRelay:
         asset: Asset,
         *,
         show_web_qr: bool = False,
-        web_qr_size: int = 1,
+        web_qr_size: float = 1,
         web_qr_position: str = "bottom-left",
         web_qr_inset_x: int = 36,
         web_qr_inset_y: int = 36,
@@ -178,7 +178,7 @@ class ImageRelay:
         asset: Asset | UUID,
         *,
         show_web_qr: bool = False,
-        web_qr_size: int = 1,
+        web_qr_size: float = 1,
         web_qr_position: str = "bottom-left",
         web_qr_inset_x: int = 36,
         web_qr_inset_y: int = 36,
@@ -220,7 +220,7 @@ class ImageRelay:
         asset: Asset,
         *,
         show_web_qr: bool = False,
-        web_qr_size: int = 1,
+        web_qr_size: float = 1,
         web_qr_position: str = "bottom-left",
         web_qr_inset_x: int = 36,
         web_qr_inset_y: int = 36,
@@ -241,7 +241,7 @@ class ImageRelay:
         asset_id: UUID,
         *,
         show_web_qr: bool = False,
-        web_qr_size: int = 1,
+        web_qr_size: float = 1,
         web_qr_position: str = "bottom-left",
         web_qr_inset_x: int = 36,
         web_qr_inset_y: int = 36,
@@ -311,7 +311,7 @@ class ImageRelay:
                 _normalize_preview, preview, location, date, qr, placement
             )
 
-    def _web_qr(self, size: int) -> Image.Image | None:
+    def _web_qr(self, size: float) -> Image.Image | None:
         if self._dashboard_url is None:
             return None
         qr = self._web_qrs.get(size)
@@ -552,10 +552,17 @@ def _draw_web_qr(
     image.paste(badge, (left, top), badge)
 
 
-def _make_qr(url: str, size: int = 1) -> Image.Image:
-    code = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=size, border=4)
+def _make_qr(url: str, size: float = 1) -> Image.Image:
+    render_scale = 8
+    code = qrcode.QRCode(
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=render_scale,
+        border=4,
+    )
     code.add_data(url)
     code.make(fit=True)
-    return cast(
+    image = cast(
         Image.Image, code.make_image(fill_color="black", back_color="white").convert("RGB")
     )
+    target = max(1, round(image.width * size / render_scale))
+    return image.resize((target, target), Image.Resampling.NEAREST)

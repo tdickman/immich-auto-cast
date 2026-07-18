@@ -94,6 +94,15 @@ def test_web_qr_accepts_authenticated_dashboard_url() -> None:
     assert qr.width > 0
 
 
+def test_web_qr_supports_crisp_fractional_scaling() -> None:
+    small = _make_qr("http://192.168.1.5:8080/", 1)
+    fractional = _make_qr("http://192.168.1.5:8080/", 1.5)
+    large = _make_qr("http://192.168.1.5:8080/", 2)
+
+    assert small.width < fractional.width < large.width
+    assert set(fractional.get_flattened_data()) == {(0, 0, 0), (255, 255, 255)}
+
+
 class Source:
     def __init__(self, preview: Preview) -> None:
         self.preview = preview

@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import ipaddress
 import json
+import math
 import os
 import re
 import tempfile
@@ -77,7 +78,7 @@ class RotationSettings:
     video_max_duration: float = 30.0
     video_muted: bool = True
     show_web_qr: bool = False
-    web_qr_size: int = 1
+    web_qr_size: float = 1
     web_qr_position: str = "bottom-left"
     web_qr_inset_x: int = 36
     web_qr_inset_y: int = 36
@@ -355,10 +356,10 @@ def _parse_candidate(
         )
         if discovery_timeout > 30:
             _fail(f"{section}.discovery_timeout must not exceed 30 seconds")
-        web_qr_size = int(
-            _positive(output.get("web_qr_size", 1), f"{section}.web_qr_size", integer=True)
+        web_qr_size = float(
+            _positive(output.get("web_qr_size", 1), f"{section}.web_qr_size")
         )
-        if web_qr_size > 6:
+        if not math.isfinite(web_qr_size) or not 1 <= web_qr_size <= 6:
             _fail(f"{section}.web_qr_size must be between 1 and 6")
         web_qr_position = str(output.get("web_qr_position", "bottom-left"))
         if web_qr_position not in {"top-left", "top-right", "bottom-left", "bottom-right"}:

@@ -78,7 +78,7 @@ The first valid configuration atomically creates `installation-id` beside the co
 - `outputs.load_timeout`: time allowed for media status to confirm a load.
 - `outputs.video_max_duration` and `outputs.video_muted`: reserved video settings. Video selection is temporarily disabled; see [`docs/video-support.md`](docs/video-support.md).
 - `outputs.show_web_qr`: overlays a small bottom-left QR code linking to and authenticating with the dashboard. Disabled by default.
-- `outputs.web_qr_size`: QR module scale from 1 (tiny, the default) through 6 (largest).
+- `outputs.web_qr_size`: QR module scale from 1 (tiny, the default) through 6 (largest), including fractional values such as 1.25 or 1.5.
 - `outputs.web_qr_position`, `outputs.web_qr_inset_x`, and `outputs.web_qr_inset_y`: per-output corner and exact 1280x720 canvas insets.
 - `outputs.web_qr_opacity`: QR badge opacity from 50% through 100%, defaulting to 75%.
 

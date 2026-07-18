@@ -304,6 +304,7 @@ async def test_dashboard_assets_expose_complete_operator_interface(
     assert 'outputField("Mute videos", "video_muted"' in javascript
     assert 'outputField("Show web interface QR code", "show_web_qr"' in javascript
     assert 'outputField("QR code size (1-6)", "web_qr_size"' in javascript
+    assert 'max: "6", step: "0.25"' in javascript
     assert 'outputField("QR corner", "web_qr_position"' in javascript
     assert 'outputField("Horizontal inset", "web_qr_inset_x"' in javascript
     assert 'outputField("Vertical inset", "web_qr_inset_y"' in javascript
