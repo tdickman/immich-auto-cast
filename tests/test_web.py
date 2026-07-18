@@ -235,6 +235,7 @@ async def test_dashboard_assets_expose_complete_operator_interface(
     assert ".current-record" in css
     assert ".upcoming-panel" in css
     assert ".photo-visual { position: relative; }" in css
+    assert ".shared-settings { padding-top: 1.5rem; }" in css
     assert css.count("object-fit: contain") == 2
     assert "object-fit: cover" not in css
     assert 'id="stop-button"' in html
