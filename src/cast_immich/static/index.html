@@ -125,7 +125,16 @@
           <fieldset>
             <legend>Immich</legend>
             <label>Server URL<input name="immich.url" type="url" required autocomplete="url"></label>
-            <label>API key<input name="immich.api_key" type="password" autocomplete="new-password" placeholder="Leave blank to keep current key"></label>
+            <label>API key<input name="immich.api_key" type="password" autocomplete="new-password" placeholder="Leave blank to keep current key" aria-describedby="api-key-permissions key-status"></label>
+            <div class="permission-hint" id="api-key-permissions">
+              <p>When creating the key in Immich, select these permissions:</p>
+              <ul>
+                <li><code>asset.read</code><span>Find photos and read metadata</span></li>
+                <li><code>asset.view</code><span>Load photo previews</span></li>
+                <li><code>album.read</code><span>Use albums as a source</span></li>
+                <li><code>person.read</code><span>Use people as a source</span></li>
+              </ul>
+            </div>
             <p class="field-hint" id="key-status">No API key configured.</p>
           </fieldset>
 

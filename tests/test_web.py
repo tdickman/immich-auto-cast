@@ -202,6 +202,9 @@ async def test_dashboard_assets_expose_complete_operator_interface(
 
     assert page.status == script.status == styles.status == 200
     assert 'name="immich.api_key" type="password"' in html
+    assert 'aria-describedby="api-key-permissions key-status"' in html
+    for permission in ("asset.read", "asset.view", "album.read", "person.read"):
+        assert f"<code>{permission}</code>" in html
     assert 'id="output-list"' in html
     assert 'role="tablist"' in html
     assert 'id="output-total"' not in html
@@ -232,6 +235,8 @@ async def test_dashboard_assets_expose_complete_operator_interface(
     assert ".current-record" in css
     assert ".upcoming-panel" in css
     assert ".photo-visual { position: relative; }" in css
+    assert css.count("object-fit: contain") == 2
+    assert "object-fit: cover" not in css
     assert 'id="stop-button"' in html
     assert 'id="reconnect-button"' not in html
     assert "Stop cast" in html
