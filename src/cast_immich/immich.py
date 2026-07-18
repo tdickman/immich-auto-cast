@@ -70,25 +70,32 @@ class ImmichClient:
             self._session = None
 
     async def select_asset(self, recent: set[UUID], batch_size: int) -> Asset:
+        return (await self.select_assets(recent, batch_size, 1))[0]
+
+    async def select_assets(
+        self, recent: set[UUID], batch_size: int, count: int
+    ) -> tuple[Asset, ...]:
         payload = {
             "type": "IMAGE",
             "visibility": "timeline",
             "withDeleted": False,
             "isOffline": False,
-            "size": min(max(batch_size, 1), 1000),
+            "size": min(max(batch_size, count, 1), 1000),
         }
         data = await self._json_request("POST", "/api/search/random", json=payload)
         if not isinstance(data, list):
             raise PermanentImmichError("Immich random search returned an incompatible response")
 
-        candidates: list[Asset] = []
+        candidates: dict[UUID, Asset] = {}
         for item in data:
             asset = self._parse_eligible_asset(item)
             if asset is not None and asset.id not in recent:
-                candidates.append(asset)
+                candidates[asset.id] = asset
         if not candidates:
             raise AssetUnavailable("Immich returned no eligible new images")
-        return random.SystemRandom().choice(candidates)
+        selected = list(candidates.values())
+        random.SystemRandom().shuffle(selected)
+        return tuple(selected[:count])
 
     async def validate_access(self) -> None:
         data = await self._json_request(

@@ -25,6 +25,7 @@ from cast_immich.web import CSRF_HEADER, MUTATION_HEADER, SECURITY_HEADERS, crea
 CSRF = "process-csrf-token"
 SECRET = "super-secret-api-key"
 EVENT_ID = "opaque-event"
+UPCOMING_ID = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
 
 
 class FakeSupervisor:
@@ -33,7 +34,7 @@ class FakeSupervisor:
             RuntimeMode.ACTIVE,
             4,
             2,
-            CoordinatorSnapshot(State.PROTECTED, True, 9),
+            CoordinatorSnapshot(State.PROTECTED, True, 9, upcoming_assets=(UPCOMING_ID,)),
         )
         values = default_form_values()
         values["immich"]["url"] = "https://photos.example"
@@ -78,6 +79,11 @@ class FakeSupervisor:
         if event_id != EVENT_ID:
             raise AssetUnavailable("not a current history event")
         return Preview(b"jpeg-data", "image/jpeg")
+
+    async def upcoming_thumbnail(self, asset_id: UUID) -> Preview:
+        if asset_id != UPCOMING_ID:
+            raise AssetUnavailable("not a current upcoming asset")
+        return Preview(b"upcoming-data", "image/webp")
 
 
 @pytest.fixture
@@ -154,6 +160,7 @@ async def test_dashboard_assets_expose_complete_operator_interface(
         label in html for label in ("Pause rotation", "Next photo", "Reconnect", "Stop cast")
     )
     assert 'id="history-list"' in html
+    assert 'id="upcoming-list"' in html
     assert "X-CSRF-Token" in javascript
     assert "@media (max-width: 520px)" in css
     assert "overflow-x: auto" in css
@@ -325,6 +332,12 @@ async def test_history_is_opaque_and_thumbnail_rejects_arbitrary_ids(
                 "thumbnail_url": f"/api/history/{EVENT_ID}/thumbnail",
             }
         ],
+        "upcoming": [
+            {
+                "asset_id": str(UPCOMING_ID),
+                "thumbnail_url": f"/api/upcoming/{UPCOMING_ID}/thumbnail",
+            }
+        ],
     }
     assert "private-load-id" not in serialized
     assert "private-load-id" not in serialized
@@ -334,3 +347,10 @@ async def test_history_is_opaque_and_thumbnail_rejects_arbitrary_ids(
     assert arbitrary.status == 404
     assert "Authorization" not in current.headers
     assert "Access-Control-Allow-Origin" not in current.headers
+
+    upcoming = await client.get(f"/api/upcoming/{UPCOMING_ID}/thumbnail")
+    arbitrary_upcoming = await client.get(f"/api/upcoming/{UUID(int=9)}/thumbnail")
+    assert upcoming.status == 200
+    assert upcoming.headers["Content-Type"] == "image/webp"
+    assert await upcoming.read() == b"upcoming-data"
+    assert arbitrary_upcoming.status == 404

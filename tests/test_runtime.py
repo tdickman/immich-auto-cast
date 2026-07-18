@@ -134,6 +134,13 @@ class FakeGraph:
             raise AssetUnavailable("not current")
         return Preview(b"image", "image/jpeg")
 
+    async def upcoming_thumbnail(self, asset_id: UUID) -> Preview:
+        value = str(asset_id)
+        self.thumbnails.append(value)
+        if asset_id != UUID(int=8):
+            raise AssetUnavailable("not upcoming")
+        return Preview(b"upcoming", "image/jpeg")
+
     async def close(self) -> None:
         self.closes += 1
 
@@ -377,9 +384,14 @@ async def test_controls_reconnect_and_discovery_delegate_to_active_boundaries(
     assert discovery_calls == [3.0]
     assert receiver.uuid == form_uuid
     assert await supervisor.thumbnail("current-event") == Preview(b"image", "image/jpeg")
+    assert await supervisor.upcoming_thumbnail(UUID(int=8)) == Preview(b"upcoming", "image/jpeg")
     with pytest.raises(AssetUnavailable):
         await supervisor.thumbnail("arbitrary-asset-id")
-    assert factory.graphs[0].thumbnails == ["current-event", "arbitrary-asset-id"]
+    assert factory.graphs[0].thumbnails == [
+        "current-event",
+        str(UUID(int=8)),
+        "arbitrary-asset-id",
+    ]
     await supervisor.close()
 
 
@@ -435,6 +447,9 @@ async def test_service_graph_thumbnail_requires_current_history_membership() -> 
     graph._history = History()
     graph._immich = Immich()
     graph._thumbnail_max_bytes = 2048
+    graph._coordinator = type(
+        "Coordinator", (), {"snapshot": CoordinatorSnapshot(State.OWNED, True, 1)}
+    )()
 
     with pytest.raises(AssetUnavailable):
         await graph.thumbnail("arbitrary-asset-id")
@@ -442,3 +457,26 @@ async def test_service_graph_thumbnail_requires_current_history_membership() -> 
 
     assert preview == Preview(b"preview", "image/jpeg")
     assert graph._immich.calls == [(UUID("12345678-1234-4234-8234-123456789abc"), 2048)]
+
+
+@pytest.mark.asyncio
+async def test_service_graph_upcoming_thumbnail_requires_queue_membership() -> None:
+    asset_id = UUID(int=8)
+
+    class Immich:
+        async def fetch_preview(self, selected: UUID, max_bytes: int | None = None) -> Preview:
+            assert (selected, max_bytes) == (asset_id, 2048)
+            return Preview(b"preview", "image/jpeg")
+
+    graph: Any = object.__new__(ServiceGraph)
+    graph._immich = Immich()
+    graph._thumbnail_max_bytes = 2048
+    graph._coordinator = type(
+        "Coordinator",
+        (),
+        {"snapshot": CoordinatorSnapshot(State.OWNED, True, 1, upcoming_assets=(asset_id,))},
+    )()
+
+    with pytest.raises(AssetUnavailable):
+        await graph.upcoming_thumbnail(UUID(int=9))
+    assert await graph.upcoming_thumbnail(asset_id) == Preview(b"preview", "image/jpeg")

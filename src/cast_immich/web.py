@@ -8,6 +8,7 @@ from datetime import datetime
 from importlib.resources import files
 from typing import Any
 from urllib.parse import urlsplit
+from uuid import UUID
 
 from aiohttp import web
 
@@ -192,10 +193,13 @@ def create_management_app(
             state = await supervisor.history_snapshot()
         except HistoryError:
             return _error(503, "history_unavailable", "history is unavailable")
+        coordinator = supervisor.snapshot.coordinator
+        upcoming = coordinator.upcoming_assets if coordinator is not None else ()
         return web.json_response(
             {
                 "rotation_enabled": state.rotation_enabled,
                 "records": [_record_json(record) for record in state.records],
+                "upcoming": [_upcoming_json(asset_id) for asset_id in upcoming],
             }
         )
 
@@ -206,6 +210,18 @@ def create_management_app(
             return _error(404, "thumbnail_unavailable", "thumbnail is unavailable")
         except HistoryError:
             return _error(503, "history_unavailable", "thumbnail is unavailable")
+        except ImmichError:
+            return _error(502, "thumbnail_upstream_error", "thumbnail is unavailable")
+        if preview.content_type not in ALLOWED_IMAGE_TYPES:
+            return _error(502, "thumbnail_invalid", "thumbnail is unavailable")
+        return web.Response(body=preview.body, content_type=preview.content_type)
+
+    async def upcoming_thumbnail(request: web.Request) -> web.Response:
+        try:
+            asset_id = UUID(request.match_info["asset_id"])
+            preview = await supervisor.upcoming_thumbnail(asset_id)
+        except (ValueError, AssetUnavailable):
+            return _error(404, "thumbnail_unavailable", "thumbnail is unavailable")
         except ImmichError:
             return _error(502, "thumbnail_upstream_error", "thumbnail is unavailable")
         if preview.content_type not in ALLOWED_IMAGE_TYPES:
@@ -223,6 +239,7 @@ def create_management_app(
     app.router.add_post("/api/reconnect", reconnect)
     app.router.add_get("/api/history", history)
     app.router.add_get("/api/history/{event_id}/thumbnail", thumbnail)
+    app.router.add_get("/api/upcoming/{asset_id}/thumbnail", upcoming_thumbnail)
     return app
 
 
@@ -396,6 +413,14 @@ def _record_json(record: DisplayRecord) -> dict[str, str]:
         "asset_id": record.asset_id,
         "confirmed_at": _isoformat(record.confirmed_at),
         "thumbnail_url": f"/api/history/{record.event_id}/thumbnail",
+    }
+
+
+def _upcoming_json(asset_id: UUID) -> dict[str, str]:
+    value = str(asset_id)
+    return {
+        "asset_id": value,
+        "thumbnail_url": f"/api/upcoming/{value}/thumbnail",
     }
 
 

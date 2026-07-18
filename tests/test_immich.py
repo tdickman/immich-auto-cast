@@ -110,6 +110,33 @@ async def test_ineligible_and_recent_assets_are_skipped(serve_app: Any) -> None:
 
 
 @pytest.mark.asyncio
+async def test_select_assets_returns_unique_non_recent_candidates(serve_app: Any) -> None:
+    recent_id = UUID(int=1)
+    available = [UUID(int=value) for value in range(2, 14)]
+
+    async def search(request: web.Request) -> web.Response:
+        assert (await request.json())["size"] == 11
+        return web.json_response(
+            [
+                eligible(recent_id),
+                *(eligible(asset_id) for asset_id in available),
+                eligible(available[0]),
+            ]
+        )
+
+    app = web.Application()
+    app.router.add_post("/api/search/random", search)
+    server = await serve_app(app)
+    settings = ImmichSettings(str(server.make_url("/")).rstrip("/"), "secret", 2, 1)
+    async with ImmichClient(settings) as client:
+        selected = await client.select_assets({recent_id}, 5, 11)
+
+    assert len(selected) == 11
+    assert len({asset.id for asset in selected}) == 11
+    assert recent_id not in {asset.id for asset in selected}
+
+
+@pytest.mark.asyncio
 async def test_authentication_failure_is_permanent(serve_app: Any) -> None:
     async def search(_request: web.Request) -> web.Response:
         return web.Response(status=403)

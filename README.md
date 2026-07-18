@@ -1,6 +1,6 @@
 # cast-immich
 
-`cast-immich` displays random Immich timeline photos on one Chromecast while the receiver is confidently idle. A trusted-LAN dashboard provides receiver selection, live controls, configuration, and the latest 10 confirmed photos. The service yields to paused, playing, buffering, external, and unknown sessions.
+`cast-immich` displays random Immich timeline photos on one Chromecast while the receiver is confidently idle. A trusted-LAN dashboard provides receiver selection, live controls, configuration, the previous 10 confirmed photos, and the next 10 queued photos. The service yields to paused, playing, buffering, external, and unknown sessions.
 
 ## Requirements
 

@@ -35,7 +35,9 @@ class State(StrEnum):
 
 
 class AssetSelector(Protocol):
-    async def select_asset(self, recent: set[UUID], batch_size: int) -> Asset: ...
+    async def select_assets(
+        self, recent: set[UUID], batch_size: int, count: int
+    ) -> tuple[Asset, ...]: ...
 
 
 class Relay(Protocol):
@@ -86,6 +88,7 @@ class CoordinatorSnapshot:
     generation: int
     error: str | None = None
     last_display: DisplayRecord | None = None
+    upcoming_assets: tuple[UUID, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +114,7 @@ class _PreparedEvent:
     url: str | None
     content_type: str | None
     error: BaseException | None
+    upcoming: tuple[Asset, ...] = ()
 
 
 CoordinatorEvent = CastEvent | CommandEvent | _TimerEvent | _PreparedEvent
@@ -148,6 +152,7 @@ class Coordinator:
         self._receiver: tuple[ReceiverStatus, float] | None = None
         self._media: tuple[MediaStatus, float] | None = None
         self._recent: deque[UUID] = deque(maxlen=settings.recent_history)
+        self._upcoming: deque[Asset] = deque(maxlen=10)
         self._nonce = 0
         self._timer: asyncio.Task[None] | None = None
         self._preparation: asyncio.Task[None] | None = None
@@ -472,11 +477,31 @@ class Coordinator:
 
     async def _prepare(self, generation: int, nonce: int, mode: str) -> None:
         try:
-            asset = await self._selector.select_asset(
-                set(self._recent), self._settings.candidate_batch
-            )
+            candidates = list(self._upcoming)
+            needed = 11 - len(candidates)
+            try:
+                candidates.extend(
+                    await self._selector.select_assets(
+                        set(self._recent) | {asset.id for asset in candidates},
+                        self._settings.candidate_batch,
+                        needed,
+                    )
+                )
+            except Exception:
+                if not candidates:
+                    raise
+            asset = candidates[0]
             url, content_type = await self._relay.mint(asset.id)
-            event = _PreparedEvent(generation, nonce, mode, asset, url, content_type, None)
+            event = _PreparedEvent(
+                generation,
+                nonce,
+                mode,
+                asset,
+                url,
+                content_type,
+                None,
+                tuple(candidates[1:11]),
+            )
         except asyncio.CancelledError:
             raise
         except Exception as error:
@@ -503,6 +528,7 @@ class Coordinator:
         if not valid:
             self._complete_active(CommandResult.REFUSED_NOT_OWNED)
             return
+        self._upcoming = deque(event.upcoming, maxlen=10)
         self._prepared = event
         await self._request_refresh("next_load" if event.mode == "next" else "load")
 
@@ -652,4 +678,5 @@ class Coordinator:
             generation=self._generation,
             error=self._error,
             last_display=self._last_display,
+            upcoming_assets=tuple(asset.id for asset in self._upcoming),
         )

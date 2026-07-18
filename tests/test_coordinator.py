@@ -22,9 +22,11 @@ class Selector:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def select_asset(self, recent: set[UUID], batch_size: int) -> Asset:
+    async def select_assets(
+        self, recent: set[UUID], batch_size: int, count: int
+    ) -> tuple[Asset, ...]:
         self.calls += 1
-        return Asset(ASSET_ID)
+        return (Asset(ASSET_ID),)
 
 
 class Relay:
@@ -175,6 +177,40 @@ async def test_stable_idle_sends_exactly_one_load_and_confirms_ownership() -> No
     )
     assert coordinator.snapshot.state is State.OWNED
     assert len(cast.loads) == 1
+    await coordinator.close()
+
+
+@pytest.mark.asyncio
+async def test_preparation_publishes_the_next_ten_assets_in_cast_order() -> None:
+    assets = tuple(Asset(UUID(int=value)) for value in range(1, 12))
+
+    class QueueSelector:
+        async def select_assets(
+            self, recent: set[UUID], batch_size: int, count: int
+        ) -> tuple[Asset, ...]:
+            assert count == 11
+            return assets
+
+    class QueueRelay:
+        async def mint(self, asset_id: UUID) -> tuple[str, str]:
+            return f"http://192.168.1.5:8787/image/{asset_id}", "image/jpeg"
+
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    cast = Cast()
+    coordinator = Coordinator(
+        queue,
+        QueueSelector(),
+        QueueRelay(),
+        cast,
+        RotationSettings(0.02, 0.01, 0.02, 5, 10),
+        INSTALLATION_ID,
+        0.02,
+    )
+
+    await drive_idle_to_load(coordinator, queue)
+
+    assert cast.loads[0][3]["assetId"] == str(assets[0].id)
+    assert coordinator.snapshot.upcoming_assets == tuple(asset.id for asset in assets[1:])
     await coordinator.close()
 
 

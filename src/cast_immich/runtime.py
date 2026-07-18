@@ -91,6 +91,8 @@ class ComponentGraph(Protocol):
 
     async def thumbnail(self, event_id: str) -> Preview: ...
 
+    async def upcoming_thumbnail(self, asset_id: UUID) -> Preview: ...
+
     async def close(self) -> None: ...
 
 
@@ -215,6 +217,11 @@ class ServiceGraph:
             asset_id = UUID(record.asset_id)
         except ValueError:
             raise AssetUnavailable("history event is invalid") from None
+        return await self._immich.fetch_preview(asset_id, self._thumbnail_max_bytes)
+
+    async def upcoming_thumbnail(self, asset_id: UUID) -> Preview:
+        if asset_id not in self._coordinator.snapshot.upcoming_assets:
+            raise AssetUnavailable("asset is no longer upcoming")
         return await self._immich.fetch_preview(asset_id, self._thumbnail_max_bytes)
 
     async def close(self) -> None:
@@ -476,6 +483,17 @@ class RuntimeSupervisor:
         try:
             async with self._thumbnail_semaphore:
                 return await graph.thumbnail(event_id)
+        except RuntimeError:
+            raise AssetUnavailable("thumbnail service changed during request") from None
+
+    async def upcoming_thumbnail(self, asset_id: UUID) -> Preview:
+        async with self._lock:
+            if self._graph is None or self._closed:
+                raise AssetUnavailable("thumbnail service is unavailable")
+            graph = self._graph
+        try:
+            async with self._thumbnail_semaphore:
+                return await graph.upcoming_thumbnail(asset_id)
         except RuntimeError:
             raise AssetUnavailable("thumbnail service changed during request") from None
 

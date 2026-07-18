@@ -1,6 +1,6 @@
 "use strict";
 
-const state = { csrf: "", revision: 0, config: null, dirty: false, timer: null, historySignature: "", pendingCommands: {} };
+const state = { csrf: "", revision: 0, config: null, dirty: false, timer: null, gallerySignature: "", pendingCommands: {} };
 const form = document.querySelector("#settings-form");
 const toast = document.querySelector("#toast");
 
@@ -101,16 +101,15 @@ async function loadConfig() {
 
 async function loadHistory() {
   const payload = await request("/api/history");
-  const list = document.querySelector("#history-list");
   document.querySelector("#history-count").textContent = `${payload.records.length} / 10`;
-  const signature = JSON.stringify(payload.records.map(record => [record.event_id, record.confirmed_at]));
-  if (signature === state.historySignature) return;
-  state.historySignature = signature;
-  if (!payload.records.length) {
-    list.innerHTML = '<p class="empty-state">No confirmed photos yet.</p>';
-    return;
-  }
-  list.replaceChildren(...payload.records.map((record, index) => {
+  document.querySelector("#upcoming-count").textContent = `${payload.upcoming.length} / 10`;
+  const signature = JSON.stringify([
+    payload.records.map(record => [record.event_id, record.confirmed_at]),
+    payload.upcoming.map(record => record.asset_id),
+  ]);
+  if (signature === state.gallerySignature) return;
+  state.gallerySignature = signature;
+  renderGallery("#history-list", payload.records, "No confirmed photos yet.", (record, index) => {
     const figure = document.createElement("figure");
     figure.className = "photo-record";
     figure.style.animationDelay = `${index * 45}ms`;
@@ -127,7 +126,36 @@ async function loadHistory() {
     caption.append(time, id);
     figure.append(image, caption);
     return figure;
-  }));
+  });
+  renderGallery("#upcoming-list", payload.upcoming, "The next photos will appear when rotation begins.", (record, index) => {
+    const figure = document.createElement("figure");
+    figure.className = "photo-record upcoming-record";
+    figure.style.animationDelay = `${index * 45}ms`;
+    const image = document.createElement("img");
+    image.src = record.thumbnail_url;
+    image.alt = `Upcoming Immich photo ${index + 1}`;
+    image.loading = "lazy";
+    const caption = document.createElement("figcaption");
+    const position = document.createElement("strong");
+    position.textContent = `NEXT ${String(index + 1).padStart(2, "0")}`;
+    const id = document.createElement("code");
+    id.textContent = record.asset_id;
+    caption.append(position, id);
+    figure.append(image, caption);
+    return figure;
+  });
+}
+
+function renderGallery(selector, records, emptyMessage, renderRecord) {
+  const list = document.querySelector(selector);
+  if (!records.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-state";
+    empty.textContent = emptyMessage;
+    list.replaceChildren(empty);
+    return;
+  }
+  list.replaceChildren(...records.map(renderRecord));
 }
 
 function collectConfig() {

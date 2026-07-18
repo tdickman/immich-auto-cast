@@ -56,12 +56,23 @@
         <div class="section-heading">
           <div>
             <p class="eyebrow">Contact sheet</p>
-            <h2 id="history-title">Recently on screen</h2>
+            <h2 id="history-title">Previous photos</h2>
           </div>
           <span class="history-count" id="history-count">0 / 10</span>
         </div>
         <div class="contact-sheet" id="history-list" aria-live="polite">
           <p class="empty-state">No confirmed photos yet.</p>
+        </div>
+
+        <div class="section-heading upcoming-heading">
+          <div>
+            <p class="eyebrow">On deck</p>
+            <h2 id="upcoming-title">Upcoming photos</h2>
+          </div>
+          <span class="history-count" id="upcoming-count">0 / 10</span>
+        </div>
+        <div class="contact-sheet" id="upcoming-list" aria-labelledby="upcoming-title" aria-live="polite">
+          <p class="empty-state">The next photos will appear when rotation begins.</p>
         </div>
       </section>
 
