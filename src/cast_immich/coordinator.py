@@ -560,7 +560,13 @@ class Coordinator:
             replay = tuple(Asset(UUID(record.asset_id)) for record in state.records[index::-1])
         except ValueError:
             return None
-        return replay + tuple(self._upcoming)
+        sequence: list[Asset] = []
+        seen: set[UUID] = set()
+        for asset in (*replay, *self._upcoming):
+            if asset.id not in seen:
+                sequence.append(asset)
+                seen.add(asset.id)
+        return tuple(sequence)
 
     async def _set_rotation(self, event: CommandEvent, enabled: bool) -> None:
         if self._rotation_enabled is enabled:

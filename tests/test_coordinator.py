@@ -632,12 +632,18 @@ async def test_seek_to_upcoming_photo_rebases_the_cast_order() -> None:
 
 
 @pytest.mark.asyncio
-async def test_seek_to_previous_photo_replays_forward_from_that_occurrence() -> None:
+async def test_seek_to_previous_photo_replays_each_asset_once() -> None:
     older_id, newer_id = UUID(int=20), UUID(int=21)
     history = History(autocast=False)
     history.records = [
         DisplayRecord("newer", "newer-load", str(newer_id), datetime.now(UTC)),
         DisplayRecord("older", "older-load", str(older_id), datetime(2025, 1, 1, tzinfo=UTC)),
+        DisplayRecord(
+            "newer-old", "newer-old-load", str(newer_id), datetime(2024, 1, 2, tzinfo=UTC)
+        ),
+        DisplayRecord(
+            "older-old", "older-old-load", str(older_id), datetime(2024, 1, 1, tzinfo=UTC)
+        ),
     ]
 
     class AnyRelay:
@@ -666,7 +672,7 @@ async def test_seek_to_previous_photo_replays_forward_from_that_occurrence() -> 
     await coordinator.handle(event(EventKind.MEDIA, media=MediaStatus("PLAYING", url, 3, metadata)))
     runner = asyncio.create_task(coordinator.run())
     refreshes = len(cast.refreshes)
-    seek = asyncio.create_task(coordinator.seek("history", "older", "seek-old"))
+    seek = asyncio.create_task(coordinator.seek("history", "older-old", "seek-old"))
     await wait_until(lambda: len(cast.refreshes) > refreshes)
     await coordinator.handle(
         event(EventKind.RECEIVER, receiver=ReceiverStatus("CC1AD845", "session"))
@@ -681,6 +687,7 @@ async def test_seek_to_previous_photo_replays_forward_from_that_occurrence() -> 
     assert await seek is CommandResult.APPLIED
     assert cast.loads[-1][3]["assetId"] == str(older_id)
     assert coordinator.snapshot.upcoming_assets[0] == newer_id
+    assert coordinator.snapshot.upcoming_assets[1] == queued[0].id
     await coordinator.close()
     runner.cancel()
 
