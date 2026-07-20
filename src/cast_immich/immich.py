@@ -135,6 +135,8 @@ class ImmichClient:
         self._random_pools: dict[tuple[PhotoSource, date | None], deque[Asset]] = {}
         self._random_pool_locks: dict[tuple[PhotoSource, date | None], asyncio.Lock] = {}
         self._recyclable_assets: dict[tuple[PhotoSource, date | None], dict[UUID, Asset]] = {}
+        self._metadata_albums: set[UUID] = set()
+        self._album_pages: dict[UUID, int] = {}
 
     async def __aenter__(self) -> ImmichClient:
         await self.start()
@@ -262,7 +264,14 @@ class ImmichClient:
         source: PhotoSource,
         payload: dict[str, Any],
     ) -> None:
-        candidates = await self._request_candidates("/api/search/random", payload, source)
+        album_id = source.id if source.kind is SourceKind.ALBUM else None
+        if album_id is not None and album_id in self._metadata_albums:
+            candidates = await self._request_album_candidates(album_id, payload, source)
+        else:
+            candidates = await self._request_candidates("/api/search/random", payload, source)
+            if album_id is not None and not candidates:
+                candidates = await self._request_album_candidates(album_id, payload, source)
+                self._metadata_albums.add(album_id)
         existing = {asset.id for asset in pool}
         for asset in candidates:
             if asset.id not in existing:
@@ -288,9 +297,38 @@ class ImmichClient:
         self, path: str, payload: dict[str, Any], source: PhotoSource
     ) -> list[Asset]:
         data = await self._json_request("POST", path, json=payload)
+        return self._parse_candidates(data, source)
+
+    async def _request_album_candidates(
+        self, album_id: UUID, payload: dict[str, Any], source: PhotoSource
+    ) -> list[Asset]:
+        page = self._album_pages.get(album_id, 1)
+        metadata_payload = dict(payload, page=page)
+        data = await self._json_request("POST", "/api/search/metadata", json=metadata_payload)
+        assets = data.get("assets") if isinstance(data, dict) else None
+        if not isinstance(assets, dict):
+            raise PermanentImmichError("Immich metadata search returned an incompatible response")
+        next_page = assets.get("nextPage")
+        if next_page is None:
+            self._album_pages[album_id] = 1
+        else:
+            try:
+                parsed_page = int(next_page)
+            except (TypeError, ValueError):
+                raise PermanentImmichError(
+                    "Immich metadata search returned an incompatible next page"
+                ) from None
+            if parsed_page < 1:
+                raise PermanentImmichError(
+                    "Immich metadata search returned an incompatible next page"
+                )
+            self._album_pages[album_id] = parsed_page
+        return self._parse_candidates(data, source)
+
+    def _parse_candidates(self, data: object, source: PhotoSource) -> list[Asset]:
         values = data.get("assets", {}).get("items") if isinstance(data, dict) else data
         if not isinstance(values, list):
-            raise PermanentImmichError("Immich random search returned an incompatible response")
+            raise PermanentImmichError("Immich search returned an incompatible response")
 
         candidates: dict[UUID, Asset] = {}
         for item in values:

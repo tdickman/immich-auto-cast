@@ -223,6 +223,48 @@ async def test_albums_filter_random_search_and_preserve_location(serve_app: Any)
 
 
 @pytest.mark.asyncio
+async def test_shared_album_falls_back_to_paginated_metadata_search(serve_app: Any) -> None:
+    album_id = UUID(int=99)
+    first_id, second_id = UUID(int=1), UUID(int=2)
+    random_requests = 0
+    metadata_pages: list[int] = []
+
+    async def random_search(_request: web.Request) -> web.Response:
+        nonlocal random_requests
+        random_requests += 1
+        return web.json_response([])
+
+    async def metadata_search(request: web.Request) -> web.Response:
+        body = await request.json()
+        assert body["albumIds"] == [str(album_id)]
+        metadata_pages.append(body["page"])
+        page = body["page"]
+        return web.json_response(
+            {
+                "assets": {
+                    "items": [eligible(first_id if page == 1 else second_id)],
+                    "nextPage": "2" if page == 1 else None,
+                }
+            }
+        )
+
+    app = web.Application()
+    app.router.add_post("/api/search/random", random_search)
+    app.router.add_post("/api/search/metadata", metadata_search)
+    server = await serve_app(app)
+    settings = ImmichSettings(str(server.make_url("/")).rstrip("/"), "secret", 2, 1)
+    source = PhotoSource(SourceKind.ALBUM, album_id)
+    async with ImmichClient(settings) as client:
+        first = await client.select_assets_for(set(), 50, 1, source)
+        second = await client.select_assets_for({first_id}, 50, 1, source)
+
+    assert first[0].id == first_id
+    assert second[0].id == second_id
+    assert random_requests == 1
+    assert metadata_pages == [1, 2]
+
+
+@pytest.mark.asyncio
 async def test_people_are_paginated_and_person_filters_random_search(serve_app: Any) -> None:
     first_id, second_id = UUID(int=21), UUID(int=22)
     observed: dict[str, Any] = {}
