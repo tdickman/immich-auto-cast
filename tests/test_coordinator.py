@@ -899,6 +899,50 @@ async def test_attention_immich_failure_retries_instead_of_becoming_protected() 
 
 
 @pytest.mark.asyncio
+async def test_source_change_recovers_immediately_from_empty_source_cooldown() -> None:
+    album_id = UUID(int=99)
+
+    class PopulatedSelector(Selector):
+        async def select_assets(
+            self, recent: set[UUID], batch_size: int, count: int
+        ) -> tuple[Asset, ...]:
+            self.calls += 1
+            if self.calls == 1:
+                raise AssetUnavailable("album is empty")
+            return (Asset(ASSET_ID),)
+
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    selector, cast = PopulatedSelector(), Cast()
+    coordinator = Coordinator(
+        queue,
+        selector,
+        Relay(),
+        cast,
+        RotationSettings(0.02, 0.001, 30, 5, 10, 0.001),
+        INSTALLATION_ID,
+        0.02,
+    )
+
+    await observe_idle(coordinator)
+    await drain_one(queue, coordinator)
+    await send_idle_snapshot(coordinator)
+    await drain_one(queue, coordinator)
+    assert coordinator.state is State.COOLDOWN
+
+    source_change = asyncio.create_task(coordinator.select_source(album_id))
+    await drain_one(queue, coordinator)
+    assert await source_change is True
+    await drain_one(queue, coordinator)
+    await send_idle_snapshot(coordinator)
+
+    assert coordinator.state is State.LOAD_PENDING
+    assert coordinator.snapshot.health.value == "healthy"
+    assert selector.calls == 2
+    assert cast.loads
+    await coordinator.close()
+
+
+@pytest.mark.asyncio
 async def test_owned_still_image_reported_as_paused_remains_owned() -> None:
     coordinator, _queue, _selector, cast = make_coordinator()
     url = "http://192.168.1.5:8787/image/existing"

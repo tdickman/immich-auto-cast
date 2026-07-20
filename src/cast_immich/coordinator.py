@@ -525,14 +525,19 @@ class Coordinator:
         self._invalidate_work(preserve_expected=owned is not None)
         self._upcoming.clear()
         self._source = source
+        self._failure_count = 0
+        self._immich_failure = None
+        self._retry_deadline = None
         if owned is not None:
             self._expected = owned
             self.state = State.OWNED
             self._begin_preparation("source")
-        elif (
-            self.state is State.IDLE_CANDIDATE and self._rotation_enabled and self._autocast_enabled
-        ):
+        elif self._rotation_enabled and self._autocast_enabled and self._is_idle():
+            self.state = State.IDLE_CANDIDATE
             self._begin_preparation("idle")
+        elif self.state is State.COOLDOWN:
+            self._receiver = self._media = None
+            await self._request_refresh("cooldown")
         event.completion.set_result(True)
 
     async def _seek_sequence(self, event: CommandEvent) -> tuple[Asset, ...] | None:
